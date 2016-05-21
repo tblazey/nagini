@@ -6,13 +6,12 @@
 
 """
 
-oxyIdaifOhta.py: Calculates metabolic rate of oxygen and OEF using a 015 oxygen scan and an image-derived input function
+oxyIdaifOhta.py: Calculates metabolic rate of oxygen using a 015 oxygen scan and an image-derived input function
 
 Uses model described by Ohta et al, Journal of Cerebral Blood Flow and Metabolism 1991
 
 Requires the following inputs:
 	pet -> PET oxygen image.
-	flow -> PET cbf image in mL/hg*min
 	artOxy -> Arterial concentration of oxygen in uM/mL
 	info -> Yi Su style PET info file. 
 	idaif -> Image derivied arterial input function
@@ -34,8 +33,6 @@ Produces the following outputs:
 	vZero_var -> Variance of vascular distrubtion volume estimate.
 	cmrOxy -> Estiamted cerebral metabolic rate of oxygen in mM/hg*min.
 	cmrOxy_var -> Variance of cmrOxy estimate
-	oef -> Oxygen extration fraction
-	oef_var -> Variance of OEF estimate
 	nRmsd -> Normalized (to-mean) root-mean-square deviation of fit
 
 Requires the following modules:
@@ -51,9 +48,8 @@ blazey@wustl.edu
 #####################
 
 import argparse, sys
-argParse = argparse.ArgumentParser(description='Estimates cerebral blood flow using:')
+argParse = argparse.ArgumentParser(description='Estimates cerebral metabolic rate of oxygen using:')
 argParse.add_argument('pet',help='Nifti oxygen image',nargs=1,type=str)
-argParse.add_argument('flow',help='Nifti flow image in mL/hg*min',nargs=1,type=str)
 argParse.add_argument('artOxy',help='Measured arterial oxygen concentration in uM/mL',nargs=1,type=float)
 argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('idaif',help='Image-derived input function',nargs=1,type=str)
@@ -83,7 +79,6 @@ print ('Loading images...')
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
-flow = nagini.loadHeader(args.flow[0])
 brain = nagini.loadHeader(args.brain[0]) 
 
 #Load in the idaif.
@@ -93,18 +88,16 @@ idaif = nagini.loadIdaif(args.idaif[0])
 info = nagini.loadInfo(args.info[0])
 
 #Check to make sure dimensions match
-if pet.shape[0:3] != flow.shape[0:3] or pet.shape[0:3] != brain.shape[0:3] or pet.shape[3] != idaif.shape[0] or pet.shape[3] != info.shape[0]:
+if pet.shape[0:3] != brain.shape[0:3] or pet.shape[3] != idaif.shape[0] or pet.shape[3] != info.shape[0]:
 	print 'ERROR: Data dimensions do not match. Please check...'
 	sys.exit()
 
 #Get the image data
 petData = pet.get_data()
-flowData = flow.get_data()
 brainData = brain.get_data()
 
 #Flatten the PET images and then mask
 petMasked = nagini.reshape4d(petData)[brainData.flatten()>0,:]
-flowMasked = nagini.reshape4d(flowData)[brainData.flatten()>0,:]
 
 #Use middle times as pet time. Account for any offset
 petTime = info[:,1] - info[0,0]
@@ -149,7 +142,7 @@ for bound in [args.oneB,args.twoB,args.vBound]:
 	bIdx += 1
 
 #Loop through every voxel
-nVox = petMasked.shape[0]; fitParams = np.zeros((nVox,11)); noC = 0;
+nVox = petMasked.shape[0]; fitParams = np.zeros((nVox,9)); noC = 0;
 for voxIdx in tqdm(range(nVox)):
 	
 	#Get voxel tac and then interpolate it
@@ -165,20 +158,18 @@ for voxIdx in tqdm(range(nVox)):
 		fitParams[voxIdx,1] = voxFit[0][1] * 60
 		fitParams[voxIdx,2] = voxFit[0][2] * 100 / args.d[0]
 		fitParams[voxIdx,3] = voxFit[0][0] * 6000.0 / args.d[0] * args.artOxy[0]
-		fitParams[voxIdx,4] = voxFit[0][0] * 6000.0 / args.d[0] / flowMasked[voxIdx]
 		
 		#Save parameter variance estimates
 		fitVar = np.diag(voxFit[1])
-		fitParams[voxIdx,5] = fitVar[0] * np.power(6000.0/args.d[0],2)
-		fitParams[voxIdx,6] = fitVar[1] * np.power(60,2)
-		fitParams[voxIdx,7] = fitVar[2] * np.power(100 / args.d[0],2)
-		fitParams[voxIdx,8] = fitVar[0] * np.power(6000.0 / args.d[0] * args.artOxy[0],2)
-		fitParams[voxIdx,9] = fitVar[0] * np.power(6000.0 / args.d[0] / flowMasked[voxIdx],2)
+		fitParams[voxIdx,4] = fitVar[0] * np.power(6000.0/args.d[0],2)
+		fitParams[voxIdx,5] = fitVar[1] * np.power(60,2)
+		fitParams[voxIdx,6] = fitVar[2] * np.power(100 / args.d[0],2)
+		fitParams[voxIdx,7] = fitVar[0] * np.power(6000.0 / args.d[0] * args.artOxy[0],2)
 
 		#Get normalized root mean square deviation
 	 	fitResid = voxInterp - nagini.flowThreeIdaif(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
 		fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
-		fitParams[voxIdx,10] = fitRmsd / np.mean(voxInterp)
+		fitParams[voxIdx,8] = fitRmsd / np.mean(voxInterp)
 
 	except(RuntimeError):
 		noC += 1
@@ -193,7 +184,7 @@ if noC > 0:
 print('Writing out results...')
 
 #Write out two parameter model images
-imgNames = ['kOne','kTwo','vZero','cmrOxy','oef','kOne_var','kTwo_var','vZero_var','cmrOxy_var','oef_var','nRmsd']
+imgNames = ['kOne','kTwo','vZero','cmrOxy','kOne_var','kTwo_var','vZero_var','cmrOxy_var','nRmsd']
 for iIdx in range(len(imgNames)):
 	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],imgNames[iIdx]))
 
