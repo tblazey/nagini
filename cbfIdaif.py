@@ -48,7 +48,7 @@ argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('idaif',help='Image-derived input function',nargs=1,type=str)
 argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
-argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=[1.05],metavar='density',type=float)
+argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for flow parameter. Default is 10 times whole brain value')
 argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for lambda parameter. Default is 0 to 1.')
 args = argParse.parse_args()
@@ -144,13 +144,13 @@ for voxIdx in tqdm(range(nVox)):
 		voxFit = opt.curve_fit(nagini.flowTwoIdaif,fitX,voxInterp,p0=init,bounds=bounds)
 		
 		#Save parameter estimates
-		fitParams[voxIdx,0] = voxFit[0][0] * 6000.0/args.d[0]
-		fitParams[voxIdx,1] = voxFit[0][1] * args.d[0]
+		fitParams[voxIdx,0] = voxFit[0][0] * 6000.0/args.d
+		fitParams[voxIdx,1] = voxFit[0][1] * args.d
 		
 		#Save parameter variance estimates
 		fitVar = np.diag(voxFit[1])
-		fitParams[voxIdx,2] = fitVar[0] * np.power(6000.0/args.d[0],2)
-		fitParams[voxIdx,3] = fitVar[1] * np.power(args.d[0],2)
+		fitParams[voxIdx,2] = fitVar[0] * np.power(6000.0/args.d,2)
+		fitParams[voxIdx,3] = fitVar[1] * np.power(args.d,2)
 
 		#Get normalized root mean square deviation
 	 	fitResid = voxInterp - nagini.flowTwoIdaif(fitX,voxFit[0][0],voxFit[0][1])

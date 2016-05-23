@@ -57,8 +57,8 @@ argParse.add_argument('idaif',help='Image-derived input function',nargs=1,type=s
 argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('blood',help='Blood glucose level in mg/dL',nargs=1,type=float)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
-argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=[1.05],metavar='density',type=float)
-argParse.add_argument('-lc',help='Value for the lumped constant. Default is 0.52.',default=[0.52],metavar='lumped constant',type=float)
+argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
+argParse.add_argument('-lc',help='Value for the lumped constant. Default is 0.52.',default=0.52,metavar='lumped constant',type=float)
 argParse.add_argument('-oneB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k1. Default is 10 times whole brain value')
 argParse.add_argument('-twoB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k2. Default is 10 times whole brain value')
 argParse.add_argument('-thrB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k3. Default is 10 times whole brain value')
@@ -115,7 +115,7 @@ wbTac = np.mean(petMasked,axis=0)
 wbInterp = interp.interp1d(petTime,wbTac,kind="linear")(interpTime)
 
 #Set scale factor to get cmrGlue to uMole / (hg*min)
-gluScale = 333.0449 / args.d[0] / args.lc[0] * args.blood[0]
+gluScale = 333.0449 / args.d / args.lc * args.blood[0]
 
 ###################
 ###Model Fitting###

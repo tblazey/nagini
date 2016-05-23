@@ -55,7 +55,7 @@ argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('idaif',help='Image-derived input function',nargs=1,type=str)
 argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
-argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=[1.05],metavar='density',type=float)
+argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-oneB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for kOne parameter. Default is 10 times whole brain value')
 argParse.add_argument('-twoB',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for kTwo parameter. Default is 10 times whole brain value')
 argParse.add_argument('-vBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for vZero parameter. Default is 0 to 1')
@@ -154,17 +154,17 @@ for voxIdx in tqdm(range(nVox)):
 		voxFit = opt.curve_fit(nagini.flowThreeIdaif,fitX,voxInterp,p0=init,bounds=bounds)
 		
 		#Save parameter estimates
-		fitParams[voxIdx,0] = voxFit[0][0] * 6000.0 / args.d[0]
+		fitParams[voxIdx,0] = voxFit[0][0] * 6000.0 / args.d
 		fitParams[voxIdx,1] = voxFit[0][1] * 60
-		fitParams[voxIdx,2] = voxFit[0][2] * 100 / args.d[0]
-		fitParams[voxIdx,3] = voxFit[0][0] * 6000.0 / args.d[0] * args.artOxy[0]
+		fitParams[voxIdx,2] = voxFit[0][2] * 100 / args.d
+		fitParams[voxIdx,3] = voxFit[0][0] * 6000.0 / args.d * args.artOxy[0]
 		
 		#Save parameter variance estimates
 		fitVar = np.diag(voxFit[1])
-		fitParams[voxIdx,4] = fitVar[0] * np.power(6000.0/args.d[0],2)
+		fitParams[voxIdx,4] = fitVar[0] * np.power(6000.0/args.d,2)
 		fitParams[voxIdx,5] = fitVar[1] * np.power(60,2)
-		fitParams[voxIdx,6] = fitVar[2] * np.power(100 / args.d[0],2)
-		fitParams[voxIdx,7] = fitVar[0] * np.power(6000.0 / args.d[0] * args.artOxy[0],2)
+		fitParams[voxIdx,6] = fitVar[2] * np.power(100 / args.d,2)
+		fitParams[voxIdx,7] = fitVar[0] * np.power(6000.0 / args.d * args.artOxy[0],2)
 
 		#Get normalized root mean square deviation
 	 	fitResid = voxInterp - nagini.flowThreeIdaif(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])

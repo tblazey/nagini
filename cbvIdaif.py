@@ -42,8 +42,8 @@ argParse.add_argument('pet',help='Nifti CO image',nargs=1)
 argParse.add_argument('idaif',help='Image-derived input functino',nargs=1)
 argParse.add_argument('brain',help='Brain mask in PET space',nargs=1)
 argParse.add_argument('out',help='Root for outputed files',nargs=1)
-argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=[1.05],metavar='density',type=float)
-argParse.add_argument('-r',help='Mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',default=[0.85],metavar='ratio',type=float)
+argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
+argParse.add_argument('-r',help='Mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',default=0.85,metavar='ratio',type=float)
 args = argParse.parse_args()
 
 #Load needed libraries
@@ -77,7 +77,7 @@ petMasked = petData.flatten()[brainData.flatten()>0]
 ############
 
 #Calculate CBV in mL/hG
-cbvData = (petMasked * 100.0 ) / (args.r[0]*args.d[0]*idaif)
+cbvData = (petMasked * 100.0 ) / (args.r*args.d*idaif)
 
 #Write out CBV image
 nagini.writeMaskedImage(cbvData,brain.shape,brainData,brain.affine,'%s_cbv'%(args.out[0]))
