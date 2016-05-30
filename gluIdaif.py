@@ -114,7 +114,7 @@ aifInterp = interp.interp1d(petTime,idaif,kind="linear")(interpTime)
 wbTac = np.mean(petMasked,axis=0)
 wbInterp = interp.interp1d(petTime,wbTac,kind="linear")(interpTime)
 
-#Set scale factor to get cmrGlue to uMole / (hg*min)
+#Set scale factor to get cmrGlu to uMole / (hg*min)
 gluScale = 333.0449 / args.d / args.lc * args.blood[0]
 
 ###################

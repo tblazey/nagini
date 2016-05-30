@@ -16,6 +16,7 @@ loadInfo: Reads in Yi Su style info file
 flowTwoIdaif: Produces model fit for two-paramter water model. For use with scipy.optimize.curvefit
 flowThreeIdaif: Prodcues model fit for three-parameter water model. For use with scipy.optimize.curvefit
 gluThreeIdaif: Produces model fit for three-paramter fdg model. For use with scipy.optimize.curvefit
+oefCalcIdaif: Calculates OEF using the stanard Mintun model. 
 
 """
 
@@ -234,5 +235,52 @@ def gluThreeIdaif(X,kOne,kTwo,kThree):
    	cOne = np.convolve(X[1,:],kOne*np.exp(-(kTwo+kThree)*X[0,:]))*minTime
 	cTwo = np.convolve(X[1,:],((kOne*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*X[0,:])))*minTime
 	return cOne[0:X.shape[1]] + cTwo[0:X.shape[1]]
+
+#Function to calculate OEF given an oxygen timecourse and values for CBF, CBV and lambda
+def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
+	
+	"""
+	
+	Simple function to calculate OEF according to the Mintun, 1984 model
+
+	Parameters
+	----------
+	pet : array
+	   A array of length n containing the pet timecourse values
+	petTime: array
+	   An array of length n containing the sampling times for PET. Must be evently spaced.
+	oxyIdaif: array
+	   An array of length n containing the input function for oxygen.
+	waterIdaif: array
+	   An array of length n containing the input fuction for water.
+	cbf: float
+	   CBF value in 1/seconds
+	cbv: float
+	   CBV value (unitless)
+	lmbda: float
+	   Blood-brain paritition coefficient (unitless)
+	R: float
+	   Ratio of small-vessel to large-vessel hematocrit (unitless)
+
+	Returns
+	-------
+	oef : float
+	   Estimated oxygen extraction fraction
+	
+	"""
+	
+	#Integrate the pet signal
+	petInteg = np.trapz(pet,petTime)
+
+	#Integrate the oxygen IDIAF
+	oxyInteg = np.trapz(oxyIdaif,petTime)
+
+	#Convolve oxygen and water with negative exponentials. Then integrate
+	sampTime = petTime[1] - petTime[0]
+	oxyExpInteg = np.trapz(np.convolve(oxyIdaif,np.exp(-cbf/lmbda*petTime))[0:petTime.shape[0]]*sampTime,petTime)
+	waterExpInteg = np.trapz(np.convolve(waterIdaif,np.exp(-cbf/lmbda*petTime))[0:petTime.shape[0]]*sampTime,petTime)
+
+	#Calculate EOF using the standard Mintun method
+	return ( petInteg - (cbf*waterExpInteg) - (cbv*R*oxyInteg) ) / ( (cbf*oxyExpInteg) - (cbv*R*0.835*oxyInteg) )
 
 

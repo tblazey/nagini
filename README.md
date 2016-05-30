@@ -8,3 +8,5 @@ Currently there are the following scripts:<br />
 	gluIdaif.py - Fits a three-paramter FDG model to estimate the cerebral metabolic rate of glucose using an image-derived input function.<br />
 	nagini.py - Module with various image processing functions.<br />
 	oxyIdaifOhta.py - Fits a three-parameter oxygen metabolism model to PET data using an image-derived input function.<br /> 
+	oxyIdaif.py - Calculates OEF and cerebral metabolic rate of oxygen using the orginal Mintun et al, 1984 model.<br />
+
