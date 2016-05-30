@@ -105,7 +105,7 @@ if pet.shape[0:3] != brain.shape[0:3] or pet.shape[0:3] != cbf.shape[0:3] or \
 	sys.exit()
 
 #Get the image data
-#petData = pet.get_data()
+petData = pet.get_data()
 cbfData = cbf.get_data()
 lmbdaData = lmbda.get_data()
 cbvData = cbv.get_data()
