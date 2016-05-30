@@ -116,7 +116,7 @@ brainMask = brainData.flatten()
 petData = nagini.reshape4d(petData)[brainMask>0,:]
 cbfData = cbfData.flatten()[brainMask>0] / 6000 * args.d
 lmbdaData = lmbdaData.flatten()[brainMask>0] * args.d
-cbvData = cbvData.flatten()[brainMask>0] / 1000 * args.d
+cbvData = cbvData.flatten()[brainMask>0] / 100 * args.d
 
 #Interpolate the aif to minimum sampling time
 minTime = np.min(np.diff(petTime))
