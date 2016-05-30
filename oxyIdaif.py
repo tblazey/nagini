@@ -59,7 +59,7 @@ argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.0
 argParse.add_argument('-delay',help='Delay parameter in seconds for estimating water component of IDAIF. Default is 20',default=20,metavar='delay',type=float)
 argParse.add_argument('-decay',help='Decay coonstant in seconds for estimating water component of IDAIF. Default is 0.0012',default=0.0722/60.0,metavar='decay',type=float)
 argParse.add_argument('-r',help='Value for the mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',nargs=1,default=0.85,type=float,metavar='ratio')
-argParse.add_argument('-range',help='Time range for OEF estimation. Default is scan start to 45 seconds.',nargs=2,type=float,metavar='time')
+argParse.add_argument('-range',help='Time range for OEF estimation in seconds. Default is scan start to 45 seconds.',nargs=2,type=float,metavar='time')
 args = argParse.parse_args()
 
 #Load needed libraries
@@ -105,23 +105,18 @@ if pet.shape[0:3] != brain.shape[0:3] or pet.shape[0:3] != cbf.shape[0:3] or \
 	sys.exit()
 
 #Get the image data
-petData = pet.get_data()
+#petData = pet.get_data()
 cbfData = cbf.get_data()
 lmbdaData = lmbda.get_data()
-cbvData = cbf.get_data()
+cbvData = cbv.get_data()
 brainData = brain.get_data()
 
-#Flatten the PET images and then mask
+#Flatten the PET images and then mask. Also convert parameteric images back to orginal PET units. 
 brainMask = brainData.flatten()
-petMasked = nagini.reshape4d(petData)[brainMask>0,:]
-cbfMasked = cbfData.flatten()[brainMask>0]
-lmbdaMasked = lmbdaData.flatten()[brainMask>0]
-cbvMasked = cbvData.flatten()[brainMask>0]
-
-#Convert cbf, lmbda, and cbv to original pet units
-cbfMasked = cbfMasked / 6000 * args.d
-lmbdaMasked = lmbdaMasked * args.d
-cbvMasked = cbvMasked / 1000 * args.d
+petData = nagini.reshape4d(petData)[brainMask>0,:]
+cbfData = cbfData.flatten()[brainMask>0] / 6000 * args.d
+lmbdaData = lmbdaData.flatten()[brainMask>0] * args.d
+cbvData = cbvData.flatten()[brainMask>0] / 1000 * args.d
 
 #Interpolate the aif to minimum sampling time
 minTime = np.min(np.diff(petTime))
@@ -141,18 +136,18 @@ aifOxy = aifInterp - aifWater
 print ('Calculating OEF and cmrOxy at each voxel...')
 
 #Loop through every voxel
-nVox = petMasked.shape[0]; oefParams = np.zeros((nVox,2))
+nVox = petData.shape[0]; oefParams = np.zeros((nVox,2))
 for voxIdx in tqdm(range(nVox)):
 	
 	#Get voxel tac and then interpolate it
-	voxTac = petMasked[voxIdx,:]
+	voxTac = petData[voxIdx,:]
 	voxInterp = interp.interp1d(petTime,voxTac,kind="linear")(interpTime)
 
 	#Calculate the OEF
-	oefParams[voxIdx,0] = nagini.oefCalcIdaif(voxInterp,interpTime,aifOxy,aifWater,cbfMasked[voxIdx],cbvMasked[voxIdx],lmbdaMasked[voxIdx],args.r)
+	oefParams[voxIdx,0] = nagini.oefCalcIdaif(voxInterp,interpTime,aifOxy,aifWater,cbfData[voxIdx],cbvData[voxIdx],lmbdaData[voxIdx],args.r)
 
 	#Calculate the cerebral metabolic rate of oxygen
-	oefParams[voxIdx,1] = oefParams[voxIdx,0] * cbfMasked[voxIdx] * args.artOxy[0] * 6000.0 / args.d 
+	oefParams[voxIdx,1] = oefParams[voxIdx,0] * cbfData[voxIdx] * args.artOxy[0] * 6000.0 / args.d 
 
 
 #############
