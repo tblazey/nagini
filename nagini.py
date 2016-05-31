@@ -17,11 +17,12 @@ flowTwoIdaif: Produces model fit for two-paramter water model. For use with scip
 flowThreeIdaif: Prodcues model fit for three-parameter water model. For use with scipy.optimize.curvefit
 gluThreeIdaif: Produces model fit for three-paramter fdg model. For use with scipy.optimize.curvefit
 oefCalcIdaif: Calculates OEF using the stanard Mintun model. 
+tfceCalc: Calculates threshold free cluster enhancement for a statistic image
 
 """
 
 #What libraries do we need
-import numpy as np, nibabel as nib, sys
+import numpy as np, nibabel as nib, sys, scipy.ndimage as img
 
 ###############
 ###Functions###
@@ -283,4 +284,70 @@ def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
 	#Calculate EOF using the standard Mintun method
 	return ( petInteg - (cbf*waterExpInteg) - (cbv*R*oxyInteg) ) / ( (cbf*oxyExpInteg) - (cbv*R*0.835*oxyInteg) )
 
+#Function to calculate TFCE score for statistic image
+def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
+	
+	"""
+	
+	Function to calculate Threshold-Free Cluster Enhancement for a statistic image. See Smith and Nichols 2009
+
+	Parameters
+	----------
+	stat : array
+	   A [n,m,q] statistic image
+	mask: array 
+	   A [n,m,q]  mask for the statistic image. Array elements greater than 0 are included
+	E: float
+	   TFCE extent parameter
+	H: float  
+	   TFCE height paramter
+	dH: float
+	    Step size for TFCE height integration
+
+	Returns
+	-------
+	tfce : array
+	   A [n,m,q] array of tfce scores at each voxel
+	
+	"""
+
+	#Create a 6 neighbor connectivity matrix for clustering
+	cMatrix = np.zeros((3,3,3))
+	cMatrix[0:3,1,1] = 1; cMatrix[1,0:3,1] = 1; cMatrix[1,1,0:3] = 1
+
+	#Flatten and mask the stat image
+	maskFlat = mask.flatten() > 0
+	statMasked = stat.flatten()[maskFlat]
+
+	#Get array of integration steps to go through. Start with a value very close to zero so that we can ignore any 0 voxels are ignored
+	dSteps = np.arange(1E-10,np.max(stat),dH)
+
+	#Create empty array to store tfce scores
+	tfceScore = np.zeros_like(statMasked)
+	
+	#Loop through every integration step
+	for step in dSteps:
+
+		#Threshold the image at current t-level
+		stepInput = stat>=step
+
+		#Get connected components at current step
+		clust,nClust = img.measurements.label(stepInput,cMatrix)
+
+		#Remove voxels outside mask
+		clustMasked = clust.flatten()[maskFlat]
+		stepMasked = stepInput.flatten()[maskFlat]
+
+		#Get size and peak of each cluster
+		clustSize = img.sum(stepMasked,clustMasked,range(nClust+1))
+		clustPeak = img.maximum(statMasked,clustMasked,range(nClust+1))
+
+		#Apply TFCE summation
+		tfceScore = tfceScore + (np.power(clustSize[clustMasked],E) * np.power(clustPeak[clustMasked],H)*dH)
+
+
+	#Return TFCE score at each voxel
+	tfceFull = np.zeros_like(stat)
+	tfceFull[mask>0] = tfceScore
+	return tfceFull
 

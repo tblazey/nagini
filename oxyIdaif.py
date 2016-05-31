@@ -138,16 +138,19 @@ print ('Calculating OEF and cmrOxy at each voxel...')
 #Loop through every voxel
 nVox = petData.shape[0]; oefParams = np.zeros((nVox,2))
 for voxIdx in tqdm(range(nVox)):
-	
-	#Get voxel tac and then interpolate it
-	voxTac = petData[voxIdx,:]
-	voxInterp = interp.interp1d(petTime,voxTac,kind="linear")(interpTime)
 
-	#Calculate the OEF
-	oefParams[voxIdx,0] = nagini.oefCalcIdaif(voxInterp,interpTime,aifOxy,aifWater,cbfData[voxIdx],cbvData[voxIdx],lmbdaData[voxIdx],args.r)
+	#Only process data if input images are non-zero
+	if cbfData[voxIdx] !=0  and lmbdaData[voxIdx] != 0 and cbvData[voxIdx] != 0:
 
-	#Calculate the cerebral metabolic rate of oxygen
-	oefParams[voxIdx,1] = oefParams[voxIdx,0] * cbfData[voxIdx] * args.artOxy[0] * 6000.0 / args.d 
+		#Get voxel tac and then interpolate it
+		voxTac = petData[voxIdx,:]
+		voxInterp = interp.interp1d(petTime,voxTac,kind="linear")(interpTime)
+		
+		#Calculate OEF
+		oefParams[voxIdx,0] = nagini.oefCalcIdaif(voxInterp,interpTime,aifOxy,aifWater,cbfData[voxIdx],cbvData[voxIdx],lmbdaData[voxIdx],args.r)
+
+		#Calculate the cerebral metabolic rate of oxygen
+		oefParams[voxIdx,1] = oefParams[voxIdx,0] * cbfData[voxIdx] * args.artOxy[0] * 6000.0 / args.d 
 
 
 #############
