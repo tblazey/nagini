@@ -57,7 +57,7 @@ argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-delay',help='Delay parameter in seconds for estimating water component of IDAIF. Default is 20',default=20,metavar='delay',type=float)
-argParse.add_argument('-decay',help='Decay coonstant in seconds for estimating water component of IDAIF. Default is 0.0012',default=0.0722/60.0,metavar='decay',type=float)
+argParse.add_argument('-decay',help='Decay constant in seconds for estimating water component of IDAIF. Default is 0.0012',default=0.0722/60.0,metavar='decay',type=float)
 argParse.add_argument('-r',help='Value for the mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',nargs=1,default=0.85,type=float,metavar='ratio')
 argParse.add_argument('-range',help='Time range for OEF estimation in seconds. Default is scan start to 45 seconds.',nargs=2,type=float,metavar='time')
 args = argParse.parse_args()
@@ -114,7 +114,7 @@ brainData = brain.get_data()
 #Flatten the PET images and then mask. Also convert parameteric images back to orginal PET units. 
 brainMask = brainData.flatten()
 petData = nagini.reshape4d(petData)[brainMask>0,:]
-cbfData = cbfData.flatten()[brainMask>0] / 6000 * args.d
+cbfData = cbfData.flatten()[brainMask>0] / 6000.0 * args.d
 lmbdaData = lmbdaData.flatten()[brainMask>0] * args.d
 cbvData = cbvData.flatten()[brainMask>0] / 100 * args.d
 
