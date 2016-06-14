@@ -18,6 +18,9 @@ flowThreeIdaif: Prodcues model fit for three-parameter water model. For use with
 gluThreeIdaif: Produces model fit for three-paramter fdg model. For use with scipy.optimize.curvefit
 oefCalcIdaif: Calculates OEF using the stanard Mintun model. 
 tfceCalc: Calculates threshold free cluster enhancement for a statistic image
+rSplineBasis: Produces a restricted spline basis and its derivatives
+knotLoc: Determines location of knots for cubic spline using percentiles
+
 
 """
 
@@ -351,3 +354,119 @@ def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
 	tfceFull[mask>0] = tfceScore
 	return tfceFull
 
+#Produces a restricted cubic spline basis and its derivatives
+def rSplineBasis(X,knots):
+	
+	"""
+		
+	Calculates a restricted cubic spline basis for X given a set of knots
+	
+	Parameters
+	----------
+	X : array
+	   A array of length n containing the x-values for cubic spline basis
+	knots: array
+	   An array of length p containing knot locations
+
+	Returns
+	-------
+	basis : matrix
+		an nxp basis for a restricted cubic spine
+	deriv : matrix
+		an nxp matrix of the derivaties for the basis functions
+	
+	"""
+	
+	#Check number of knots
+	nKnots = knots.shape[0]
+	if nKnots <= 2:
+		print 'Number of knots must be at least 3'
+		sys.exit()	
+
+	#Create array to store basis matrix and derivatives
+	nPoints = X.shape[0]
+	basis = np.ones((nPoints,nKnots))
+	deriv = np.zeros((nPoints,nKnots))
+	
+	#Set second basis function to x-value
+	basis[:,1] = X; deriv[:,1] = 1;
+	
+	#Loop through free knots
+	for knotIdx in range(nKnots-2):
+
+		#First part of basis function
+		termOne = np.maximum(0,np.power(X-knots[knotIdx],3))
+		termOneD = np.maximum(0,np.power(X-knots[knotIdx],2)*3) * np.sign(termOne)
+		
+		#Second part of basis function
+		scaleD = (knots[nKnots-1]-knots[nKnots-2])
+		twoScale = (knots[nKnots-1]-knots[knotIdx]) / scaleD 
+		termTwo = np.maximum(0,np.power(X-knots[nKnots-2],3)) * twoScale          
+		termTwoD = np.maximum(0,np.power(X-knots[nKnots-2],2)*3) * twoScale * np.sign(termTwo) 
+		
+		#You get the drill
+		threeScale = (knots[nKnots-2]-knots[knotIdx]) / scaleD
+		termThree = np.maximum(0,np.power(X-knots[nKnots-1],3)) * threeScale		    
+		termThreeD = np.maximum(0,np.power(X-knots[nKnots-1],2)*3) * threeScale	* np.sign(termThree)
+		
+		#Compute the basis function. 
+		basis[:,knotIdx+2] =  termOne - termTwo + termThree
+		
+		#Compute derivative.
+		deriv[:,knotIdx+2] = termOneD - termTwoD + termThreeD
+		
+	
+	return basis, deriv
+	
+#Calculates knot locations for cubic spline using percentiles
+def knotLoc(X,nKnots):
+	
+	"""
+		
+	Calculates location for knots based on sample quantiles
+	
+	Parameters
+	----------
+	X : array
+	   A array of length n containing the x-values
+	nKnots: interger
+	  Number of knots
+
+	Returns
+	-------
+	knots : array
+		A set of knot locations
+		
+	Notes
+	-----
+	Uses the same basic algorithm as Hmisc package in R:
+		
+		For 3 knots -> outer percentiles are 10 and 90%
+		For 4-6 knots -> outer percentiels are 5% and 95%
+		For >6 knots -> outer percentiles are 2.5% and 97.5%
+		
+		All other knots are linearly spaced between outer percentiles
+	
+	"""
+	
+	#Set boundary knot percentiles 
+	if nKnots <= 2:
+		print 'ERROR: Number of knots must be at least 3'
+		sys.exit()	
+	elif nKnots == 3:
+		bKnots = [10,90]
+	elif nKnots >= 4 and nKnots <= 6:
+		bKnots = [5,95]
+	elif nKnots >6 and nKnots <= X.shape[0]:
+		bKnots = [2.5,97.5]
+	else:
+		'ERROR: Cannot determine knot locations for number of knots: %s'%(nKnots)
+		sys.exit()
+	
+	#Get percentiles for all knots
+	knotP = np.linspace(bKnots[0],bKnots[1],nKnots)
+		
+	#Get actual knot locations based upon percentiles
+	knots = np.percentile(X,knotP)
+	
+	return knots
