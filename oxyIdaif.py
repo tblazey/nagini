@@ -118,8 +118,8 @@ cbfData = cbfData.flatten()[brainMask>0] / 6000.0 * args.d
 lmbdaData = lmbdaData.flatten()[brainMask>0] * args.d
 cbvData = cbvData.flatten()[brainMask>0] / 100 * args.d
 
-#Interpolate the aif to half the minimum sampling time
-minTime = np.min(np.diff(petTime)) / 2
+#Interpolate the aif to minimum sampling time
+minTime = np.min(np.diff(petTime))
 interpTime = np.arange(petRange[0],petRange[1],minTime)
 nTime = interpTime.shape[0]
 aifLinear = interp.interp1d(petTime,idaif,kind="linear",fill_value="extrapolate")
