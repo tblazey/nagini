@@ -105,8 +105,8 @@ petMasked = nagini.reshape4d(petData)[brainData.flatten()>0,:]
 #Use middle times as pet time. Account for any offset
 petTime = info[:,1] - info[0,0]
 
-#Interpolate the aif to minimum sampling time
-minTime = np.min(np.diff(petTime))
+#Interpolate the aif to half the minimum sampling time
+minTime = np.min(np.diff(petTime)) / 2
 interpTime = np.arange(petTime[0],petTime[-1],minTime)
 aifInterp = interp.interp1d(petTime,idaif,kind="linear")(interpTime)
 
