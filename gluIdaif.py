@@ -9,7 +9,9 @@
 gluIdaif.py: Calculates cmrGlu using a FDG water scan and an image-derived input function
 
 Uses basic three-parameter two-compartment model (irreverisble binding)
-See Carson, 2003 Positron Emission Tomography: Basic Science and Clinical Practice. 
+See Carson, 2003 Positron Emission Tomography: Basic Science and Clinical Practice.
+
+Can perform an optional CBV correction using method used in: Sasaki et al, JCBF&M 1986 
 
 Requires the following inputs:
 	pet -> PET FDG image.
@@ -25,6 +27,8 @@ User can set the following options:
 	oneB -> Bounds for k1. Default is 10 times whole brain value.
 	twoB -> Bounds for k2. Default is 10 times whole brain value.
 	thrB -> Bounds for k3. Default is 10 times whole brain value.
+	cbv -> CBV pet iamge in mL/hg
+	omega -> Ratio of FDG radioactivity in whole blood and plasma for CBV correction. Default is 0.9.
 
 Produces the following outputs:
 	kOne -> Voxelwise map of k1 in 1/seconds.
@@ -62,6 +66,8 @@ argParse.add_argument('-lc',help='Value for the lumped constant. Default is 0.52
 argParse.add_argument('-oneB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k1. Default is 10 times whole brain value')
 argParse.add_argument('-twoB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k2. Default is 10 times whole brain value')
 argParse.add_argument('-thrB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k3. Default is 10 times whole brain value')
+argParse.add_argument('-cbv',nargs=1,help='Estimate of CBV in mL/hg. If given, corrects for blood volume.')
+argParse.add_argument('-omega',nargs=1,help='Ratio of FDG in whole brain and plasma for CBV correction. Default is 0.9',default=0.9)
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -105,17 +111,34 @@ petMasked = nagini.reshape4d(petData)[brainData.flatten()>0,:]
 #Use middle times as pet time. Account for any offset
 petTime = info[:,1] - info[0,0]
 
+#If cbv image is given, correct for blood volume
+if ( args.cbv is not None ):
+
+	#Load in CBV image
+	cbv = nagini.loadHeader(args.cbv[0])
+	if cbv.shape[0:3] != pet.shape[0:3]:
+		print 'ERROR: CBV image does not match PET resolution...'
+		sys.exit()
+	cbvData = cbv.get_data()
+
+	#Mask it and convert it to original units
+	cbvMasked = cbvData.flatten()[brainData.flatten()>0] / 100 * args.d
+
+	#Correct all the tacs for blood volume
+	petMasked = petMasked - (args.omega*cbvMasked[:,np.newaxis]*petTime)
+
 #Interpolate the aif to minimum sampling time
 minTime = np.min(np.diff(petTime))
 interpTime = np.arange(petTime[0],petTime[-1],minTime)
 aifInterp = interp.interp1d(petTime,idaif,kind="linear")(interpTime)
 
-#Get the whole brain tac and interpolate that
+#Get the whole brain tac and interpolate it
 wbTac = np.mean(petMasked,axis=0)
 wbInterp = interp.interp1d(petTime,wbTac,kind="linear")(interpTime)
 
 #Set scale factor to get cmrGlu to uMole / (hg*min)
 gluScale = 333.0449 / args.d / args.lc * args.blood[0]
+
 
 ###################
 ###Model Fitting###
@@ -134,7 +157,7 @@ except(RuntimeError):
 init = wbFit[0]
 
 #Set bounds 
-bounds = np.array((init/10,init*10),dtype=np.float); bIdx = 0
+bounds = np.array((init/25,init*25),dtype=np.float); bIdx = 0
 for bound in [args.oneB,args.twoB,args.thrB]:
 	#If user wants different bounds, use them.
 	if bound is not None:
