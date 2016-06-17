@@ -15,7 +15,8 @@ reshape4d: Reshape a 4d image to a 2d image (perserves the last dimension)
 loadInfo: Reads in Yi Su style info file
 flowTwoIdaif: Produces model fit for two-paramter water model. For use with scipy.optimize.curvefit
 flowThreeIdaif: Prodcues model fit for three-parameter water model. For use with scipy.optimize.curvefit
-gluThreeIdaif: Produces model fit for three-paramter fdg model. For use with scipy.optimize.curvefit
+gluThreeIdaif: Produces model fit for three-parameter fdg model. For use with scipy.optimize.curvefit
+gluFourIdaif: Produces model fit for four-parameter fdg model. For use with scipy.optimize.curvefit
 oefCalcIdaif: Calculates OEF using the stanard Mintun model. 
 tfceCalc: Calculates threshold free cluster enhancement for a statistic image
 rSplineBasis: Produces a restricted spline basis and its derivatives
@@ -167,7 +168,7 @@ def flowTwoIdaif(X,flow,lmbda):
 	Parameters
 	----------
 	X : array
-	   A [2,n] numpy array where the first column is time and the second the input function
+	   A [2,n] numpy array where the first row is time and the second the input function
 	flow : float
 	   Flow parameter
 	lmbda: float
@@ -192,7 +193,7 @@ def flowThreeIdaif(X,flow,kTwo,vZero):
 	Parameters
 	----------
 	X : array
-	   A [2,n] numpy array where the first column is time and the second the input function
+	   A [2,n] numpy array where the first row is time and the second the input function
 	flow : float
 	   Flow parameter
 	kTwo: float
@@ -221,7 +222,7 @@ def gluThreeIdaif(X,kOne,kTwo,kThree):
 	Parameters
 	----------
 	X : array
-	   A [2,n] numpy array where the first column is time and the second the input function
+	   A [2,n] numpy array where the first row is time and the second the input function
 	kOne : float
 	   kOne parameter
 	kTwo: float
@@ -239,6 +240,43 @@ def gluThreeIdaif(X,kOne,kTwo,kThree):
    	cOne = np.convolve(X[1,:],kOne*np.exp(-(kTwo+kThree)*X[0,:]))*minTime
 	cTwo = np.convolve(X[1,:],((kOne*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*X[0,:])))*minTime
 	return cOne[0:X.shape[1]] + cTwo[0:X.shape[1]]
+
+#Function to fit fdg tracer data using four-parameter convolution model
+def gluFourIdaif(X,kOne,kTwo,kThree,kFour):
+	"""
+	
+	scipy.optimize.curvefit model function for the four-parameter FDG model.
+	Does not correct for delay or dispersion of input function, so only for use with an IDAIF
+
+	Parameters
+	----------
+	X : array
+	   A [2,n] numpy array where the first row is time and the second the input function
+	kOne : float
+	   kOne parameter
+	kTwo: float
+	   kTwo parameter
+	kThree: float
+	   kThree paramter
+	kFour: float
+	   kFour parameter
+
+	Returns
+	-------
+	cT : array
+	   A n length array with the model predictions given kOne, kTwo, kThree, and kFour
+	
+	"""
+	minTime = X[0,1] - X[0,0]
+	aLeft = kTwo + kThree + kFour
+	aRight = np.sqrt(np.power(kTwo+kThree+kFour,2)-(4.0*kTwo*kFour))
+	aOne = (aLeft - aRight) / 2.0
+	aTwo = (aLeft + aRight) / 2.0
+   	cLeft = kOne/(aTwo-aOne)
+	cMiddle = (kThree+kFour-aOne) * np.exp(-aOne*X[0,:])
+	cRight = (aTwo-kThree-kFour) * np.exp(-aTwo*X[0,:])
+	cI = np.convolve(cLeft*(cMiddle+cRight),X[1,:])[0:X.shape[1]]*minTime
+	return cI
 
 #Function to calculate OEF given an oxygen timecourse and values for CBF, CBV and lambda
 def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
