@@ -77,7 +77,7 @@ def writeMaskedImage(data,outDims,mask,affine,name):
 	"""
 	
 	#Get masked data array back into original dimensions
-	outData = np.zeros_like(mask)
+	outData = np.zeros_like(mask,dtype=np.float64)
 	outData[mask==1] = data
 	outData = outData.reshape(outDims)
 

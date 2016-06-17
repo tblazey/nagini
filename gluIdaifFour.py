@@ -138,7 +138,9 @@ except(RuntimeError):
 init = wbFit[0]
 
 #Set bounds 
-bounds = np.array((init/10,init*10),dtype=np.float); bIdx = 0
+bounds = np.array(([0,0,0,0],init*25),dtype=np.float); 
+bounds[1,3] = bounds[1,3] * 4
+bIdx = 0
 for bound in [args.oneB,args.twoB,args.thrB,args.fourB]:
 	#If user wants different bounds, use them.
 	if bound is not None:
