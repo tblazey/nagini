@@ -125,7 +125,7 @@ if ( args.cbv is not None ):
 	cbvMasked = cbvData.flatten()[brainData.flatten()>0] / 100 * args.d
 
 	#Correct all the tacs for blood volume
-	petMasked = petMasked - (args.omega*cbvMasked[:,np.newaxis]*petTime)
+	petMasked = petMasked - (args.omega*cbvMasked[:,np.newaxis]*idaif)
 
 #Interpolate the aif to minimum sampling time
 minTime = np.min(np.diff(petTime))
