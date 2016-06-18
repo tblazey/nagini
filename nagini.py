@@ -14,10 +14,11 @@ loadIdaif: Loads in a idaif from a one-column text file
 reshape4d: Reshape a 4d image to a 2d image (perserves the last dimension)
 loadInfo: Reads in Yi Su style info file
 flowTwoIdaif: Produces model fit for two-paramter water model. For use with scipy.optimize.curvefit
-flowThreeIdaif: Prodcues model fit for three-parameter water model. For use with scipy.optimize.curvefit
+flowThreeIdaif: Produces model fit for three-parameter water model. For use with scipy.optimize.curvefit
 gluThreeIdaif: Produces model fit for three-parameter fdg model. For use with scipy.optimize.curvefit
 gluFourIdaif: Produces model fit for four-parameter fdg model. For use with scipy.optimize.curvefit
 oefCalcIdaif: Calculates OEF using the stanard Mintun model. 
+oxyOneIdaif: Procuces model fit for one-parameter Mintun oxygen model. For use with sci.py.optimize.curvefit
 tfceCalc: Calculates threshold free cluster enhancement for a statistic image
 rSplineBasis: Produces a restricted spline basis and its derivatives
 knotLoc: Determines location of knots for cubic spline using percentiles
@@ -508,3 +509,70 @@ def knotLoc(X,nKnots):
 	knots = np.percentile(X,knotP)
 	
 	return knots
+
+#Creates optimization function scipy curve fit
+def oxyOneIdaif(flow,lmbda,cbv,R):
+	
+	"""
+	
+	Produces a model fit function for scipy curvefit
+
+	Parameters
+	----------
+
+	flow: float
+	   Estimate of cerebral blood flow
+	lmbda: float
+	   Estimate of blood brian partieint coeficient
+	cbv: float
+	   Estimate of CBV
+	R: float
+	   Ratio of small-vessel to large vessel hematocrit
+	
+
+	Returns
+	-------
+	oxyPred: function
+		A function that will return the Mintun model predictions given inputs X and E 
+	
+	"""
+	
+	#Actual model prediction function
+	def oxyPred(X,E):
+
+		"""
+	
+		Calculates the model predictions
+
+		Parameters
+		----------
+
+		X: array
+	   	   A 3,n array containing pet times, oxygen input function, and water input function
+		E: float
+		   Oxygen extraction fraction
+	
+
+		Returns
+		-------
+		cT: array of length n
+	  	   Model predictions for Mintun oxygen model give input parameters
+	
+		"""
+
+		#Get sampling time and number of time points
+		sampTime = X[0,1] - X[0,0]
+		nTime = X.shape[1]
+
+		#Calculate components of model
+		cOne = cbv*R*(1-(E*0.835))*X[1,:]
+		cTwo = flow*np.convolve(X[2,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
+		cThree = flow*E*np.convolve(X[1,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
+
+		#Return model predictions
+		return cOne + cTwo + cThree
+
+	return oxyPred
+
+
+
