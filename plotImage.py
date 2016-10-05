@@ -21,7 +21,9 @@ argParse.add_argument('-z',help='Slice to plot in z dimension. Default is halfwa
 argParse.add_argument('-f',help='Frame to plot. Starts at 0. Default is 0',type=int,default=0)
 argParse.add_argument('-struct',help='Structural image for underlay',nargs=1,type=str)
 argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1,type=float,default=[1.0])
-argParse.set_defaults(showMin=False,showMax=True)
+argParse.add_argument('-scale',help='Scale image by specified amount',nargs=1,type=float)
+argParse.add_argument('-sci',help='Use scientific notation for colorbar labels',dest='useSci',action='store_true')
+argParse.set_defaults(showMin=False,showMax=True,useSci=False)
 args = argParse.parse_args()
 
 #Make sure user min is above maximum
@@ -107,10 +109,14 @@ if args.struct is not None:
 #Mask image
 maskedData = np.ma.masked_where(imgData==args.mVal,imgData)
 
+
+#Scale the image if necessary
+if args.scale is not None:
+	maskedData = maskedData * args.scale[0]
+
 #Get insensity threshold limits if user doesn't set them.
 if args.thr is  None:
 	args.thr = np.percentile(maskedData[maskedData!=0],[2,98])
-args.thr = np.round(args.thr,1)
 
 #Get colormap and don't show masked values
 cMap = plt.get_cmap(args.cmap)
@@ -136,7 +142,7 @@ if args.pTitle is not None:
 	plt.suptitle(args.pTitle[0],color='white',x=0.44,y=0.75,size=14,weight='bold')
 
 #Make the grid for the plotting
-gs = mpl.gridspec.GridSpec(1, 5,width_ratios=[0.33,0.33,0.33,0.01])
+gs = mpl.gridspec.GridSpec(1, 4,width_ratios=[0.33,0.33,0.33,0.01])
 
 #Figure of the x and y axis limits
 axisLimits = np.max(img.shape)
@@ -174,7 +180,10 @@ cBar = mpl.colorbar.ColorbarBase(axFour,cmap=cMap,ticks=[0,1])
 if args.cTitle is not None:
 	cBar.set_label(args.cTitle[0],color='white',rotation='90',size=9,weight="bold",labelpad=-20)
 cBar.ax.set_position((0.775, 0.29, 0.025, 0.35))
-cBar.set_ticklabels([args.thr[0],args.thr[1]])
+if args.useSci is True:
+	cBar.set_ticklabels(['%.2e'%(args.thr[0]),'%.1e'%(args.thr[1])])
+else:
+	cBar.set_ticklabels([np.round(args.thr[0],2),np.round(args.thr[1],2)])
 for tick in cBar.ax.yaxis.get_major_ticks():
     tick.label2.set_color('white')
     tick.label2.set_weight('bold')
