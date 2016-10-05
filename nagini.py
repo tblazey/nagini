@@ -185,6 +185,127 @@ def flowTwoIdaif(X,flow,lmbda):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-flow/lmbda*X[0,:]))*(X[0,1]-X[0,0])
 	return flowConv[0:X.shape[1]]
 
+def flowThreeDelay(aifInterp):
+
+	"""
+	
+	Produces a four parameter blood flow model fit function for scipy curvefit
+
+	Parameters
+	----------
+
+	aifCoef: function
+		Interpolation function for AIF
+
+	Returns
+	-------
+	flowPred: function
+		A function that will return the three-parameter blood flow predictions 
+		given pet time, flow, lambda, delta
+	
+	"""
+
+	def flowPred(petTime,flow,lmbda,delta):
+
+			
+		"""
+	
+		Produces a three parameter blood flow model fit function for scipy curvefit
+
+		Parameters
+		----------
+
+		petTime: array
+	   		An n length array pet time points
+		flow: float
+	  		Blood flow parameter
+		lmbda: float
+			Blood brain paritition coefficient parameter
+		delta: float
+			Delay parameter
+
+		Returns
+		-------
+		flowConv: array
+			A n length array of model predictions given parameters
+	
+		"""
+		
+		#Remove delay and dispersion from input function while using spline interpolation
+		cAif = aifInterp(petTime+delta)
+
+		#Calculate model prediciton
+		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
+		
+		#Return predictions
+		return flowConv[0:petTime.shape[0]]
+	
+	#Return function
+	return flowPred
+
+def flowFour(aifCoef,aifKnots):
+
+	"""
+	
+	Produces a four parameter blood flow model fit function for scipy curvefit
+
+	Parameters
+	----------
+
+	aifCoef: array
+	   An n length array of coefficients for natural cubic spline
+	aifKnots: array
+	   A n length array of knot locations for natural cubic spline
+
+	Returns
+	-------
+	flowPred: function
+		A function that will return the four-parameter blood flow predictions 
+		given pet time, flow, lambda, delta and tau
+	
+	"""
+
+	def flowPred(petTime,flow,lmbda,delta,tau):
+
+			
+		"""
+	
+		Produces a four parameter blood flow model fit function for scipy curvefit
+
+		Parameters
+		----------
+
+		petTime: array
+	   		An n length array pet time points
+		flow: float
+	  		Blood flow parameter
+		lmbda: float
+			Blood brain paritition coefficient parameter
+		delta: float
+			Delay parameter
+		tau: float
+			Dispersion parameter
+
+		Returns
+		-------
+		flowConv: array
+			A n length array of model predictions given parameters
+	
+		"""
+		
+		#Remove delay and dispersion from input function while using spline interpolation
+		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
+		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
+
+		#Calculate model prediciton
+		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
+		
+		#Return predictions
+		return flowConv[0:petTime.shape[0]]
+	
+	#Return function
+	return flowPred
+
 def flowThreeIdaif(X,flow,kTwo,vZero):
 	"""
 	
@@ -241,6 +362,59 @@ def gluThreeIdaif(X,kOne,kTwo,kThree):
    	cOne = np.convolve(X[1,:],kOne*np.exp(-(kTwo+kThree)*X[0,:]))*minTime
 	cTwo = np.convolve(X[1,:],((kOne*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*X[0,:])))*minTime
 	return cOne[0:X.shape[1]] + cTwo[0:X.shape[1]]
+
+def gluGefIdaif(cbf):
+
+	"""
+	
+	Produces a three parameter FDG model fit function for scipy curvefit. Calculates GEF.
+
+	Parameters
+	----------
+
+	cbf: float
+	   Cerebral blood flow estimate. In 1/seconds.
+
+	Returns
+	-------
+	gluPred: function
+		A function that will return the three-parameter FDG predictions 
+		given X, flow, gef, k2 and k3
+	
+	"""
+
+	def gluPred(X,gef,kTwo,kThree):
+	
+		"""
+	
+		scipy.optimize.curvefit model function for the three-parameter FDG model.
+		Does not correct for delay or dispersion of input function, so only for use with an IDAIF
+
+		Parameters
+		----------
+		X : array
+	   		A [2,n] numpy array where the first row is time and the second the input function
+		gef : float
+	   		Glucose extraction fraction
+		kTwo: float
+	  		kTwo parameter
+		kThree: float
+	   		kThree paramter
+
+		Returns
+		-------
+		cT : array
+	   		A n length array with the model predictions given flow, gef,kTwo,and kThree
+	
+		"""
+	
+		minTime = X[0,1] - X[0,0]
+   		cOne = np.convolve(X[1,:],(cbf*gef)*np.exp(-(kTwo+kThree)*X[0,:]))*minTime
+		cTwo = np.convolve(X[1,:],((cbf*gef*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*X[0,:])))*minTime
+		return cOne[0:X.shape[1]] + cTwo[0:X.shape[1]]
+	
+	#Return function
+	return gluPred
 
 #Function to fit fdg tracer data using four-parameter convolution model
 def gluFourIdaif(X,kOne,kTwo,kThree,kFour):

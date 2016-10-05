@@ -24,10 +24,12 @@ Requires the following inputs:
 User can set the following options:
 	d -> Density of brain tissue in g/mL. Default is 1.05
 	lc -> Value for the lumped constant. Default is 0.52
-	oneB -> Bounds for k1. Default is 10 times whole brain value.
+	oneB -> Bounds for k1. Default is 10 times whole brain value. Ignored if -flow is used.
 	twoB -> Bounds for k2. Default is 10 times whole brain value.
 	thrB -> Bounds for k3. Default is 10 times whole brain value.
-	cbv -> CBV pet iamge in mL/hg
+	gefB -> Bounds for glucose extraction fraction. Default is 0 to 1. Only valid if -flow is used. 
+	cbv -> CBV pet image in mL/hg
+	cbf -> CBF pet image in mL/hg/min
 	omega -> Ratio of FDG radioactivity in whole blood and plasma for CBV correction. Default is 0.9.
 
 Produces the following outputs:
@@ -40,6 +42,10 @@ Produces the following outputs:
 	kThree_var -> Variance of k3 estimate.
 	cmrGlu_var -> Variance of cmrGlu estimate.
 	nRmsd -> Normalized root-mean-square deviation for fit.
+
+If -flow is set, script will also produce:
+	gef -> Voxelwise map of glucose extraction fraction
+	gef_var -> Variance of gef estimate
 
 Requires the following modules:
 	argparse, numpy, nibabel, nagini, tqdm, scipy
@@ -66,12 +72,14 @@ argParse.add_argument('-lc',help='Value for the lumped constant. Default is 0.52
 argParse.add_argument('-oneB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k1. Default is 10 times whole brain value')
 argParse.add_argument('-twoB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k2. Default is 10 times whole brain value')
 argParse.add_argument('-thrB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of k3. Default is 10 times whole brain value')
+argParse.add_argument('-gefB',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds of glucose extraction fraction. Default is 0 to 1.')
 argParse.add_argument('-cbv',nargs=1,help='Estimate of CBV in mL/hg. If given, corrects for blood volume.')
+argParse.add_argument('-cbf',nargs=1,help='Estimate of CBF in mL/hg/min. If given, estimates GEF.')
 argParse.add_argument('-omega',nargs=1,help='Ratio of FDG in whole brain and plasma for CBV correction. Default is 0.9',default=0.9)
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
-for bound in [args.oneB,args.twoB,args.thrB]:
+for bound in [args.oneB,args.twoB,args.thrB,args.gefB]:
 	if bound is not None:
 		if bound[1] <= bound[0]:
 			print 'ERROR: Lower bound of %f is not lower than upper bound of %f'%(bound[0],bound[1])
@@ -127,6 +135,20 @@ if ( args.cbv is not None ):
 	#Correct all the tacs for blood volume
 	petMasked = petMasked - (args.omega*cbvMasked[:,np.newaxis]*idaif)
 
+#Load cbf image if necessary
+if ( args.cbf is not None ):
+
+	#Load in CFV image
+	cbf = nagini.loadHeader(args.cbf[0])
+	if cbf.shape[0:3] != pet.shape[0:3]:
+		print 'ERROR: CBF image does not match PET resolution...'
+		sys.exit()
+	cbfData = cbf.get_data()
+
+	#Mask it and convert it to original units
+	cbfMasked = cbfData.flatten()[brainData.flatten()>0] / 6000.0 * args.d
+
+
 #Interpolate the aif to minimum sampling time
 minTime = np.min(np.diff(petTime))
 interpTime = np.arange(petTime[0],petTime[-1],minTime)
@@ -148,17 +170,42 @@ print ('Beginning fitting procedure...')
 #Attempt to fit model to whole-brain curve
 fitX = np.vstack((interpTime,aifInterp))
 try:
-	wbFit = opt.curve_fit(nagini.gluThreeIdaif,fitX,wbInterp,p0=[0.001,0.001,0.001],bounds=([0,0,0],[1,1,1]))
+	if args.cbf is None:
+		wbFit = opt.curve_fit(nagini.gluThreeIdaif,fitX,wbInterp,p0=[0.001,0.001,0.001],bounds=([0,0,0],[1,1,1]))
+	else:
+		wbFit = opt.curve_fit(nagini.gluGefIdaif(np.mean(cbfMasked)),fitX,wbInterp,p0=[0.2,0.001,0.001],bounds=([0,0,0],[1,1,1]))
 except(RuntimeError):
-	print 'ERROR: Cannot estimate two-parameter model on whole-brain curve. Exiting...'
+	print 'ERROR: Cannot estimate three-parameter model on whole-brain curve. Exiting...'
 	sys.exit()
 
 #Use whole-brain values as initilization
 init = wbFit[0]
 
-#Set bounds 
-bounds = np.array((init/25,init*25),dtype=np.float); bIdx = 0
-for bound in [args.oneB,args.twoB,args.thrB]:
+#Setup voxelwise fit depending on model
+nVox = petMasked.shape[0]
+if args.cbf is None:
+
+	#Set bounds for k1 based model
+	bounds = np.array((init/25,init*25),dtype=np.float)
+	bList = [args.oneB,args.twoB,args.thrB]
+
+	#Create data structure for results and set output names
+	fitParams = np.zeros((nVox,9))
+	imgNames = ['kOne','kTwo','kThree','cmrGlu','kOne_var','kTwo_var','kThree_var','cmrGlu_var','nRmsd']
+	
+else:
+	
+	#Set bounds for gef based model
+	bounds = np.array(([0,init[1]/25.0,init[2]/25.0],[1,init[1]*25.0,init[2]*25.0]),dtype=np.float)
+	bList = [args.gefB,args.twoB,args.thrB]
+	
+	#Create data structure for results and set output names
+	fitParams = np.zeros((nVox,11))
+	imgNames = ['gef','kTwo','kThree','kOne','cmrGlu','gef_var','kTwo_var','kThree_var','kOne_var','cmrGlu_var','nRmsd']
+
+#Make sure bounds are set properly
+bIdx = 0
+for bound in bList:
 	#If user wants different bounds, use them.
 	if bound is not None:
 		bounds[0,bIdx] = bound[0]
@@ -169,7 +216,7 @@ for bound in [args.oneB,args.twoB,args.thrB]:
 	bIdx += 1
 
 #Loop through every voxel
-nVox = petMasked.shape[0]; fitParams = np.zeros((nVox,9)); noC = 0; 
+noC = 0; 
 for voxIdx in tqdm(range(nVox)):
 	
 	#Get voxel tac and then interpolate it
@@ -177,25 +224,51 @@ for voxIdx in tqdm(range(nVox)):
 	voxInterp = interp.interp1d(petTime,voxTac,kind="linear")(interpTime)
 
 	try:
+		#Run the appropriate kinetic model
+		if args.cbf is None:
+			
+			#Fit model with k1 estimate
+			voxFit = opt.curve_fit(nagini.gluThreeIdaif,fitX,voxInterp,p0=init,bounds=bounds)
 
-		#Get voxel fit with three parameter model
-		voxFit = opt.curve_fit(nagini.gluThreeIdaif,fitX,voxInterp,p0=init,bounds=bounds)
+			#Save parameter estimates.
+			fitParams[voxIdx,0:3] = voxFit[0]
+			fitParams[voxIdx,3] = ((voxFit[0][0]*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]))*gluScale
 
-		#Save parameter estimates.
-		fitParams[voxIdx,0:3] = voxFit[0]
-		fitParams[voxIdx,3] = ((voxFit[0][0]*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]))*gluScale
+			#Save estimated parameter variances. Use delta method to get cmrGlu variance.
+			fitParams[voxIdx,4:7] = np.diag(voxFit[1])
+			gluGrad = np.array([(gluScale*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]), 
+				    	   (-1*voxFit[0][0]*voxFit[0][2]*gluScale)/np.power(voxFit[0][1]+voxFit[0][2],2),
+				           (voxFit[0][0]*voxFit[0][1]*gluScale)/np.power(voxFit[0][1]+voxFit[0][2],2)])
+			fitParams[voxIdx,7] = np.dot(np.dot(gluGrad.T,voxFit[1]),gluGrad)
 
-		#Save estimated parameter variances. Use delta method to get cmrGlu variance.
-		fitParams[voxIdx,4:7] = np.diag(voxFit[1])
-		gluGrad = np.array([(gluScale*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]), 
-				    (-1*voxFit[0][0]*voxFit[0][2]*gluScale)/np.power(voxFit[0][1]+voxFit[0][2],2),
-				    (voxFit[0][0]*voxFit[0][1]*gluScale)/np.power(voxFit[0][1]+voxFit[0][2],2)])
-		fitParams[voxIdx,7] = np.dot(np.dot(gluGrad.T,voxFit[1]),gluGrad)
+			#Get normalized root mean square deviation
+	 		fitResid = voxInterp - nagini.gluThreeIdaif(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
+			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
+			fitParams[voxIdx,8] = fitRmsd / np.mean(voxInterp)
 
-		#Get normalized root mean square deviation
-	 	fitResid = voxInterp - nagini.gluThreeIdaif(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
-		fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
-		fitParams[voxIdx,8] = fitRmsd / np.mean(voxInterp)
+			
+		else:
+			#Fit model with gef estimate
+			voxFunc = nagini.gluGefIdaif(cbfMasked[voxIdx])
+			voxFit = opt.curve_fit(voxFunc,fitX,voxInterp,p0=init,bounds=bounds)
+
+			#Save parameter estimates
+			fitParams[voxIdx,0:3] = voxFit[0]
+			fitParams[voxIdx,3] = voxFit[0][0] * cbfMasked[voxIdx]
+			fitParams[voxIdx,4] = ((voxFit[0][0]*cbfMasked[voxIdx]*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]))*gluScale
+
+			#Save parameter variances. Use delta method to get cmrGlu and k1 variance
+			fitParams[voxIdx,5:8] = np.diag(voxFit[1])
+			fitParams[voxIdx,8] = voxFit[1][0][0] * np.power(cbfMasked[voxIdx],2)
+			gluGrad = np.array([(gluScale*cbfMasked[voxIdx]*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]), 
+				    	    (-1*voxFit[0][0]*voxFit[0][2]*gluScale*cbfMasked[voxIdx])/np.power(voxFit[0][1]+voxFit[0][2],2),
+				            (voxFit[0][0]*voxFit[0][1]*gluScale*cbfMasked[voxIdx])/np.power(voxFit[0][1]+voxFit[0][2],2)])
+			fitParams[voxIdx,9] = np.dot(np.dot(gluGrad.T,voxFit[1]),gluGrad)
+
+			#Get normalized root mean square deviation
+	 		fitResid = voxInterp - voxFunc(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
+			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
+			fitParams[voxIdx,10] = fitRmsd / np.mean(voxInterp)	
 
 	except(RuntimeError):
 		noC += 1
@@ -210,7 +283,6 @@ if noC > 0:
 print('Writing out results...')
 
 #Write out two parameter model images
-imgNames = ['kOne','kTwo','kThree','cmrGlu','kOne_var','kTwo_var','kThree_var','cmrGlu_var','nRmsd']
 for iIdx in range(len(imgNames)):
 	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],imgNames[iIdx]))
 
