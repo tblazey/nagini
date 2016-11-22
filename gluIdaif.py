@@ -148,7 +148,6 @@ if ( args.cbf is not None ):
 	#Mask it and convert it to original units
 	cbfMasked = cbfData.flatten()[brainData.flatten()>0] / 6000.0 * args.d
 
-
 #Interpolate the aif to minimum sampling time
 minTime = np.min(np.diff(petTime))
 interpTime = np.arange(petTime[0],petTime[-1],minTime)
@@ -177,7 +176,7 @@ try:
 except(RuntimeError):
 	print 'ERROR: Cannot estimate three-parameter model on whole-brain curve. Exiting...'
 	sys.exit()
-
+sys.exit()
 #Use whole-brain values as initilization
 init = wbFit[0]
 

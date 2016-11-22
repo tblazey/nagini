@@ -160,6 +160,26 @@ def loadInfo(iPath):
 		sys.exit()
 	return info
 
+def writeText(out,X):
+	"""
+
+	Write out numpy array. Wrapper for numpy.savetxt
+
+	Parameters
+	----------
+	out: string
+	   A filename
+	X: Numpy array
+	   A numpy array to write out
+
+	"""
+
+	try:
+		np.savetxt(out,X)
+	except (IOError):
+		print 'ERROR: Cannot save output file at %s'%(out)
+		sys.exit()
+
 def flowTwoIdaif(X,flow,lmbda):
 	"""
 	
@@ -362,6 +382,35 @@ def gluThreeIdaif(X,kOne,kTwo,kThree):
    	cOne = np.convolve(X[1,:],kOne*np.exp(-(kTwo+kThree)*X[0,:]))*minTime
 	cTwo = np.convolve(X[1,:],((kOne*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*X[0,:])))*minTime
 	return cOne[0:X.shape[1]] + cTwo[0:X.shape[1]]
+
+def gluIdaifLin(X,bOne,bTwo,bThree):
+
+	"""
+
+	Produces a three parameter FDG model fit using the linearized form. 
+
+	Parameters
+	----------
+	X : array
+	   A [3,n] numpy array with the first row is first integral of the input function,
+	   the second the second integral of the input function, and the third the integral of the 
+	   time activity curve
+	bZero : float
+	   first parameter
+	bTwo: float
+	   second parameter
+	bThree: float
+	   third paramter
+
+	Returns
+	-------
+	gluPred: array
+	   An n length array with model predictions
+
+	"""
+
+	return bOne*X[0,:] + bTwo*X[1,:] + bThree*X[2,:]
+	
 
 def gluGefIdaif(cbf):
 

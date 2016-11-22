@@ -23,6 +23,7 @@ argParse.add_argument('-struct',help='Structural image for underlay',nargs=1,typ
 argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1,type=float,default=[1.0])
 argParse.add_argument('-scale',help='Scale image by specified amount',nargs=1,type=float)
 argParse.add_argument('-sci',help='Use scientific notation for colorbar labels',dest='useSci',action='store_true')
+argParse.add_argument('-custom',help='Custom color map RGB array. Overides -cmap',nargs='+',type=float) 
 argParse.set_defaults(showMin=False,showMax=True,useSci=False)
 args = argParse.parse_args()
 
@@ -34,6 +35,7 @@ if args.thr is not None:
 
 #Load in the libraries we will need
 import numpy as np, matplotlib as mpl, matplotlib.pyplot as plt, nibabel as nib, nagini, sys
+from matplotlib.colors import LinearSegmentedColormap
 
 #Load in image header
 img = nagini.loadHeader(args.img[0])
@@ -119,7 +121,12 @@ if args.thr is  None:
 	args.thr = np.percentile(maskedData[maskedData!=0],[2,98])
 
 #Get colormap and don't show masked values
-cMap = plt.get_cmap(args.cmap)
+if args.custom is None:
+	cMap = plt.get_cmap(args.cmap)
+else:
+	rgbArray = np.array(args.custom)
+	rgbArray = rgbArray.reshape((rgbArray.shape[0]/3,3))
+	cMap = LinearSegmentedColormap.from_list('map',rgbArray,N=100)
 cMap.set_bad('black',alpha=0)
 
 #Decide whether or not to show values below minimum
