@@ -53,6 +53,9 @@ segData = seg.get_data()
 if len(segData.shape) == 4:
 	segData = segData[:,:,:,0]
 
+#Make a flattened version of the segmentation for use later
+segFlat = segData.flatten()
+
 #Reshape PET data if necessary
 if len(petData.shape) == 4:
 	petData = nagini.reshape4d(petData)
@@ -73,11 +76,10 @@ tMatrix = np.zeros((nRoi,nPet),dtype=np.float64)
 
 #Get weighted values
 for iIdx in range(nRoi):
-	print iIdx
+	print 'Processing ROI: %i'%(iIdx)
 
-	#Make i ROI
-	iRoi = np.zeros((seg.shape[0],seg.shape[1],seg.shape[2]),dtype=np.float64)
-	iRoi[segData==roiList[iIdx]] = 1.0
+	#Make i ROI. Make sure it is float as well
+	iRoi = np.float64(np.where(segData==roiList[iIdx],1.0,0.0))
 
 	#Smooth i ROI for the first time
 	iSmooth = filt.gaussian_filter(iRoi,3.397).flatten()
@@ -90,16 +92,15 @@ for iIdx in range(nRoi):
 		tMatrix[iIdx,petIdx] = iSmooth.dot(petData[:,petIdx])
 
 	#Smooth i ROI again
-	iSmooth = filt.gaussian_filter(iSmooth,3.397)
+	iSmooth = filt.gaussian_filter(iSmooth.reshape((seg.shape[0],seg.shape[1],seg.shape[2])),3.397).flatten()
 
-	for jIdx in tqdm(range(iIdx,nRoi)):
+	for jIdx in range(iIdx,nRoi):
 
 		#Make j ROI
-		jRoi = np.zeros((seg.shape[0],seg.shape[1],seg.shape[2]),dtype=np.float64)
-		jRoi[segData==roiList[jIdx]] = 1.0
+		jRoi = np.float64(np.where(segFlat==roiList[jIdx],1.0,0.0))
 
 		#Get weight
-		wMatrix[iIdx,jIdx] = iSmooth.dot(jRoi.flatten())
+		wMatrix[iIdx,jIdx] = iSmooth.dot(jRoi)
 		wMatrix[jIdx,iIdx] = wMatrix[iIdx,jIdx]
 
 
