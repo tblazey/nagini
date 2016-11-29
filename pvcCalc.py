@@ -6,8 +6,9 @@ arg_parse = argparse.ArgumentParser(description='Run SGTM and RBV Partial Volume
 arg_parse.add_argument('pet',help='PET image. Can be 4d',nargs=1)
 arg_parse.add_argument('seg',help='3d segmentation image',nargs=1)
 arg_parse.add_argument('out',help='Root for output image',nargs=1)
-arg_parse.add_argument('-noZero',help='Do not count 0 as a seperate ROI',action='store_const',const=1,)
+arg_parse.add_argument('-fwhm',help='FWHM for PET PSF in mm. Default is 8.0',nargs=1,type=float,default=[8.0])
 arg_parse.add_argument('-mask',help='Mask for RBV image',nargs=1)
+arg_parse.add_argument('-noZero',help='Do not count 0 as a seperate ROI',action='store_const',const=1)
 args = arg_parse.parse_args()
 
 #Import libraries
@@ -56,7 +57,7 @@ if len(segData.shape) == 4:
 #Make a flattened version of the segmentation for use later
 segFlat = segData.flatten()
 
-#Reshape PET data if necessary
+#Reshape PET data as necessary
 if len(petData.shape) == 4:
 	petData = nagini.reshape4d(petData)
 	nPet = petData.shape[1]
@@ -74,15 +75,18 @@ nRoi = roiList.shape[0]
 wMatrix = np.zeros((nRoi,nRoi),dtype=np.float64)
 tMatrix = np.zeros((nRoi,nPet),dtype=np.float64)
 
+#Determine smoothing values for each dimension.
+voxSize = pet.header.get_zooms()
+sigmas = np.divide(args.fwhm[0]/np.sqrt(8.0*np.log(2.0)),voxSize[0:3])
+
 #Get weighted values
-for iIdx in range(nRoi):
-	print 'Processing ROI: %i'%(iIdx)
+for iIdx in tqdm(range(nRoi),desc='Creating SGTM Matrix'):
 
 	#Make i ROI. Make sure it is float as well
 	iRoi = np.float64(np.where(segData==roiList[iIdx],1.0,0.0))
 
 	#Smooth i ROI for the first time
-	iSmooth = filt.gaussian_filter(iRoi,3.397).flatten()
+	iSmooth = filt.gaussian_filter(iRoi,sigmas).flatten()
 
 	#Get diagonal weight
 	wMatrix[iIdx,iIdx] = iSmooth.dot(iSmooth)
@@ -92,7 +96,7 @@ for iIdx in range(nRoi):
 		tMatrix[iIdx,petIdx] = iSmooth.dot(petData[:,petIdx])
 
 	#Smooth i ROI again
-	iSmooth = filt.gaussian_filter(iSmooth.reshape((seg.shape[0],seg.shape[1],seg.shape[2])),3.397).flatten()
+	iSmooth = filt.gaussian_filter(iSmooth.reshape((seg.shape[0],seg.shape[1],seg.shape[2])),sigmas).flatten()
 
 	for jIdx in range(iIdx,nRoi):
 
@@ -104,30 +108,32 @@ for iIdx in range(nRoi):
 		wMatrix[jIdx,iIdx] = wMatrix[iIdx,jIdx]
 
 
-#Save weight matrix
+#Save weight matricies
 nagini.writeText('%s_wMatrix.txt'%(args.out[0]),wMatrix)
+nagini.writeText('%s_tMatrix.txt'%(args.out[0]),tMatrix)
 
 #Reshape pet data back
 petData = petData.reshape((seg.shape[0],seg.shape[1],seg.shape[2],nPet))
 
 #Loop through pet images
-roiCoef = np.zeros(nRoi,dtype=np.float64)
+roiCoef = np.zeros((nRoi,nPet),dtype=np.float64)
 rbvData = np.zeros(petData.shape,dtype=np.float64)
-for petIdx in range(nPet):
+for petIdx in tqdm(range(nPet),desc='Calculating PVC values'):
 	
 	#Get regional coefficients
-	roiCoef,_ = opt.nnls(wMatrix,tMatrix[:,petIdx])
-
-	#Save coefficients
-	nagini.writeText('%s_rsfAvg%03i.txt'%(args.out[0],petIdx),roiCoef)
+	roiCoef[:,petIdx],_ = opt.nnls(wMatrix,tMatrix[:,petIdx])
 
 	#Make rsf image
 	rsfData = np.zeros((seg.shape[0],seg.shape[1],seg.shape[2]),dtype=np.float64)
 	for roiIdx in range(nRoi):
-		rsfData[segData==roiList[roiIdx]] = roiCoef[roiIdx]
+		rsfData[segData==roiList[roiIdx]] = roiCoef[roiIdx,petIdx]
 
 	#Make rbv image
-	rbvData[:,:,:,petIdx] = petData[:,:,:,petIdx] * rsfData / filt.gaussian_filter(rsfData,3.397) * maskData
+	rsfSmooth =  filt.gaussian_filter(rsfData,sigmas) * maskData
+	rbvData[:,:,:,petIdx] = np.ma.divide(petData[:,:,:,petIdx] * rsfData,np.ma.array(rsfSmooth,mask=rsfSmooth==0))
+
+#Save coefficients
+nagini.writeText('%s_rsfAvg.txt'%(args.out[0]),roiCoef)
 
 #Save RBV image
 rbv = nib.Nifti1Image(rbvData,seg.affine)
