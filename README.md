@@ -3,7 +3,7 @@ A set of Python scripts for processing quantitative PET data.<br />
 
 Currently there are the following scripts:<br />
 	
-	cbfIdaif.py - Fits a four-parameter flow model to PET data using an arterial-sampled input function.
+	cbfAif.py - Fits a four-parameter flow model to PET data using an arterial-sampled input function.
 	cbfIdaif.py - Fits a two-parameter flow model to PET data using an image-derived input function.
 	cbfIdaifOhta.py - Fits a three-parameter flow model to PET data using an image-derived input function.
 	cbvIdaif.py - Creates quantiative CBV images using an image-derived input function.
