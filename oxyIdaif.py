@@ -169,7 +169,8 @@ if args.kinetic == 1:
 
 	#Use whole-brain values as initilization
 	init = wbFit[0]
-
+	print init
+	sys.exit()
 	#Set bounds 
 	bounds = np.array([0,1],dtype=np.float)
 	if args.eBound is not None:

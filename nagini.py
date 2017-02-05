@@ -117,6 +117,30 @@ def loadIdaif(iPath):
 		sys.exit()
 	return idaif
 
+def loadAif(aPath):
+	"""
+	
+	Loads in text file with AIF values
+
+	Parameters
+	----------
+	aPath : string
+	   Path to AIF text file
+
+	Returns
+	-------
+	aif : n by 2 matrix
+	   Numpy array with sampling times and aif
+	
+	"""
+	
+	try:
+		aif = np.loadtxt(aPath,skiprows=2,usecols=[0,1])
+	except (IOError):
+		print 'ERROR: Cannot load idaif at %s'%(aPath)
+		sys.exit()
+	return aif
+
 def reshape4d(array):
 	"""
 	
@@ -180,7 +204,7 @@ def writeText(out,X):
 		print 'ERROR: Cannot save output file at %s'%(out)
 		sys.exit()
 
-def flowTwoIdaif(X,flow,lmbda):
+def flowTwoIdaif(X,flow,lmbda=1):
 	"""
 	
 	scipy.optimize.curvefit model function for the two-paramter model flow model.
@@ -205,11 +229,12 @@ def flowTwoIdaif(X,flow,lmbda):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-flow/lmbda*X[0,:]))*(X[0,1]-X[0,0])
 	return flowConv[0:X.shape[1]]
 
+
 def flowThreeDelay(aifInterp):
 
 	"""
 	
-	Produces a four parameter blood flow model fit function for scipy curvefit
+	Produces a three parameter blood flow model fit function for scipy curvefit
 
 	Parameters
 	----------
@@ -251,8 +276,74 @@ def flowThreeDelay(aifInterp):
 	
 		"""
 		
-		#Remove delay and dispersion from input function while using spline interpolation
+		#Remove delay form input function
 		cAif = aifInterp(petTime+delta)
+
+		#Calculate model prediciton
+		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
+		
+		#Return predictions
+		return flowConv[0:petTime.shape[0]]
+	
+	#Return function
+	return flowPred
+
+def flowTwoSet(aifCoef,aifKnots,delta,tau):
+
+	"""
+	
+	Produces a four parameter blood flow model fit function for scipy curvefit
+
+	Parameters
+	----------
+
+	aifCoef: array
+	   An n length array of coefficients for natural cubic spline
+	aifKnots: array
+	   A n length array of knot locations for natural cubic spline
+	delta: float
+		Input function shift
+	tau: float
+		Input function disperison
+
+	Returns
+	-------
+	flowPred: function
+		A function that will return the four-parameter blood flow predictions 
+		given pet time, flow, and lambda
+	
+	"""
+
+	def flowPred(petTime,flow,lmbda):
+
+			
+		"""
+	
+		Produces a four parameter blood flow model fit function for scipy curvefit
+
+		Parameters
+		----------
+
+		petTime: array
+	   		An n length array pet time points
+		flow: float
+	  		Blood flow parameter
+		lmbda: float
+			Blood brain paritition coefficient parameter
+
+		Returns
+		-------
+		flowConv: array
+			A n length array of model predictions given parameters
+	
+		"""
+		
+		#Remove delay and dispersion from input function while using spline interpolation
+		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
+		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
+
+		#Add in decay correction basis upon delay
+		cAif = cAif * np.exp(np.log(2)/122.24*delta)
 
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
@@ -317,6 +408,9 @@ def flowFour(aifCoef,aifKnots):
 		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
 		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
 
+		#Add in decay correction basis upon delay
+		cAif = cAif * np.exp(np.log(2)/122.24*delta)
+
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
 		
@@ -325,6 +419,82 @@ def flowFour(aifCoef,aifKnots):
 	
 	#Return function
 	return flowPred
+
+
+def flowFourMl(aifCoef,aifKnots,petTime,petTac):
+
+	"""
+	
+	Produces a four parameter blood flow log-likelihood function for scipy curvefit
+
+	Parameters
+	----------
+
+	aifCoef: array
+	   	An n length array of coefficients for natural cubic spline
+	aifKnots: array
+	   	A n length array of knot locations for natural cubic spline
+	petTime: array
+		A m lengtha rray containing pet times
+	petTac: array
+		A m length array containing pet timecourse
+
+	Returns
+	-------
+	flowLl: function
+		A function that will return the log likelihood for blood flow model given 
+		given pet time, flow, lambda, delta and tau
+	
+	"""
+
+	def flowLl(params):
+
+			
+		"""
+	
+		Produces a four parameter blood flow log likelihood function for scipy curvefit
+
+		Parameters
+		----------
+
+		params: array
+			A vector with 5 elements where:
+				params[0] = flow
+				params[1] = lmbda
+				params[2] = delta
+				params[3] = tau
+				params[4] = sigma
+
+		Returns
+		-------
+		logLik: float
+			 Negative log likelihood of model given parameters
+	
+		"""
+		
+		#Rename params
+		flow = params[0]; lmbda = params[1]; delta = params[2]; tau = params[3]; sigma = params[4]
+
+		#Remove delay and dispersion from input function while using spline interpolation
+		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
+		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
+
+		#Add in decay correction basis upon delay
+		cAif = cAif * np.exp(np.log(2)/122.24*delta)
+
+		#Calculate model prediciton
+		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))[0:petTime.shape[0]]*(petTime[1]-petTime[0])
+
+		#Calculate log-likelihood
+		nData = flowConv.shape[0]
+		logLik = (-nData/2.0*np.log(2*np.pi)) - (-nData/2.0*np.log(sigma)) \
+			 - ((1.0/2.0*sigma)*np.sum(np.power(petTac-flowConv,2)))
+		
+		#Return predictions
+		return -logLik
+	
+	#Return function
+	return flowLl
 
 def flowThreeIdaif(X,flow,kTwo,vZero):
 	"""

@@ -12,7 +12,7 @@ argParse.add_argument('-mVal',help='Value not to show when plotting. Default is 
 argParse.add_argument('-pTitle',help='Title for positive colorbar',nargs=1,type=str)
 argParse.add_argument('-nTitle',help='Title for negative colorbar',nargs=1,type=str)
 argParse.add_argument('-fTitle',help='Title for figure',nargs=1,type=str)
-argParse.add_argument('-thr',help='Minimum and maximum for color scale. Default is 2% and 98% of absolute values.',nargs=2,type=float)
+argParse.add_argument('-thr',help="Minimum and maximum for color scale. Default is 2 per and 98 per of absolute values.",nargs=2,type=float)
 argParse.add_argument('-showMin',help='Show values below minimum.',dest='showMin',action='store_true')
 argParse.add_argument('-hideMax',help='Do not show values below maximum',dest='showMax',action='store_false')
 argParse.add_argument('-x',help='Slice to plot in x dimension. Default is halfway point. Starts at 0',type=int)

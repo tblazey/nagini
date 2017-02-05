@@ -14,9 +14,10 @@ Requires the following inputs:
 
 User can set the following options:
 	mask -> Only compute correlation within specified mask. Assumed to be binary
+	rank -> Computes spearman rank order correlation instead of pearson.
 
 Requires the following modules:
-	argparse, numpy, nibabel, nagini, sys
+	argparse, numpy, nibabel, nagini, sys, scipy
 
 Tyler Blazey, Fall 2016
 blazey@wustl.edu
@@ -32,11 +33,12 @@ argParse = argparse.ArgumentParser(description='Calculates pearson correlation b
 argParse.add_argument('imgOne',help='First image',nargs=1,type=str)
 argParse.add_argument('imgTwo',help='Second image',nargs=1,type=str)
 argParse.add_argument('-mask',help='Binary mask over which to compute correlation')
+argParse.add_argument('-rank',help='Compute Spearman correlation instead of Pearson',action='store_const',const=1)
 args = argParse.parse_args()
 
 
 #Load needed libraries
-import numpy as np, nibabel as nib, nagini, sys
+import numpy as np, nibabel as nib, nagini, sys, scipy.stats as stats
 
 #########################
 ###Data Pre-Processing###
@@ -79,10 +81,16 @@ if args.mask is not None:
 	twoData = twoData[maskData==1]
 
 #Compute correlation
-corr = np.corrcoef(oneData,twoData)
+if args.rank == 1:
+	
+	#Compute spearman correlation
+	corr = stats.spearmanr(oneData,twoData)
+	print corr[0]
+else:
 
-#Show user correlation
-print corr[0,1]
+	#Compute pearson correlation
+	corr = np.corrcoef(oneData,twoData)
+	print corr[0,1]
 
 
 

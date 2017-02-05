@@ -37,6 +37,9 @@ if args.thr is not None:
 import numpy as np, matplotlib as mpl, matplotlib.pyplot as plt, nibabel as nib, nagini, sys
 from matplotlib.colors import LinearSegmentedColormap
 
+#Change default math font
+mpl.rcParams['mathtext.default'] = 'regular'
+
 #Load in image header
 img = nagini.loadHeader(args.img[0])
 
@@ -142,7 +145,7 @@ else:
 	cMap.set_over(cMap(255))
 
 #Make figure
-fig = plt.figure(facecolor='black',figsize=(10,5))
+fig = plt.figure(facecolor='black',figsize=(10,5),frameon=False)
 
 #Add a title to the figure
 if args.pTitle is not None:
@@ -185,7 +188,7 @@ axThree.set_position((0.56,0.09,axThreeP.width,axThreeP.height))
 axFour = plt.subplot(gs[3])
 cBar = mpl.colorbar.ColorbarBase(axFour,cmap=cMap,ticks=[0,1])
 if args.cTitle is not None:
-	cBar.set_label(args.cTitle[0],color='white',rotation='90',size=9,weight="bold",labelpad=-20)
+	cBar.set_label(r'$%s$'%(args.cTitle[0]),color='white',rotation='90',size=9,weight="bold",labelpad=-20)
 cBar.ax.set_position((0.775, 0.29, 0.025, 0.35))
 if args.useSci is True:
 	cBar.set_ticklabels(['%.2e'%(args.thr[0]),'%.1e'%(args.thr[1])])
