@@ -850,7 +850,7 @@ def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
 	tfceFull[mask>0] = tfceScore
 	return tfceFull
 
-def rSplineBasis(X,knots):
+def rSplineBasis(X,knots,integ=False):
 	
 	"""
 		
@@ -862,6 +862,8 @@ def rSplineBasis(X,knots):
 	   A array of length n containing the x-values for cubic spline basis
 	knots: array
 	   An array of length p containing knot locations
+	integ: logical
+		If True, returns integral of spline as well
 
 	Returns
 	-------
@@ -869,6 +871,8 @@ def rSplineBasis(X,knots):
 		an nxp basis for a restricted cubic spine
 	deriv : matrix
 		an nxp matrix of the derivaties for the basis functions
+	integ : matrix
+		If integ=True, an nxp matrix of the integrals for the basis function
 	
 	"""
 	
@@ -882,9 +886,17 @@ def rSplineBasis(X,knots):
 	nPoints = X.shape[0]
 	basis = np.ones((nPoints,nKnots))
 	deriv = np.zeros((nPoints,nKnots))
-	
+	if integ is True: 
+		
+		#Matrix for storing integral results
+		aDeriv = np.zeros((nPoints,nKnots))
+				
+		#Compute first integral terms
+		aDeriv[:,0] = X 
+		aDeriv[:,1] = np.power(X,2) * 0.5
+			
 	#Set second basis function to x-value
-	basis[:,1] = X; deriv[:,1] = 1;
+	basis[:,1] = X; deriv[:,1] = 1 
 	
 	#Loop through free knots
 	for knotIdx in range(nKnots-2):
@@ -910,9 +922,19 @@ def rSplineBasis(X,knots):
 		#Compute derivative.
 		deriv[:,knotIdx+2] = termOneD - termTwoD + termThreeD
 		
-	
-	return basis, deriv
-	
+		#Compute integral if necessary
+		if integ is True: 
+			termOneInt = np.maximum(0,np.power(X-knots[knotIdx],4)*0.25) * np.sign(termOne)
+			termTwoInt = np.maximum(0,np.power(X-knots[nKnots-2],4)*0.25) * twoScale * np.sign(termTwo)
+			termThreeInt = np.maximum(0,np.power(X-knots[nKnots-1],4)*0.25) * threeScale * np.sign(termThree)
+			aDeriv[:,knotIdx+2] = termOneInt - termTwoInt + termThreeInt
+			
+	#Return appropriate basis set
+	if integ is True:
+		return basis, deriv, aDeriv
+	else:	
+		return basis, deriv
+		
 def knotLoc(X,nKnots):
 	
 	"""

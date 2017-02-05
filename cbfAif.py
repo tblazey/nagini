@@ -6,7 +6,7 @@
 
 """
 
-cbfIdaif.py: Calculates CBF using a 015 water scan and an arterial sampled input function
+cbfAif.py: Calculates CBF using a 015 water scan and an arterial sampled input function
 
 Uses model described by Mintun et al, Journal of Nuclear 1983
 	
