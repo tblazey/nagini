@@ -20,6 +20,6 @@ Currently there are the following scripts:<br />
 	plotSigImage.py - 3-view plot of two volume significance images using FSL-style red/orange and blue/cyan color scale.
 	pvcCalc.py - Calcultes RSF and RBV partial volume corrlection.
 	splineSuvr.py - Calculate a SUVR after smoothing out PET timeseries with cubic splines.
-	
+	srtmTwo.py - Calculates a simplified reference tissue model (SRTM2)	
 	
 
