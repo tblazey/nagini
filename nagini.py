@@ -11,15 +11,23 @@ Set of python functions for PET image processing. Currently there are the follow
 loadHeader: Loads the header of a Nifiti Image
 writeMaskedImage: Writes out an image that has been masked (first puts it back to original dimensions)
 loadIdaif: Loads in a idaif from a one-column text file
+loadAif: Loads in standard Wash U .crt file
 reshape4d: Reshape a 4d image to a 2d image (perserves the last dimension)
 loadInfo: Reads in Yi Su style info file
-flowTwoIdaif: Produces model fit for two-paramter water model. For use with scipy.optimize.curvefit
-flowThreeIdaif: Produces model fit for three-parameter water model. For use with scipy.optimize.curvefit
-gluThreeIdaif: Produces model fit for three-parameter fdg model. For use with scipy.optimize.curvefit
-gluFourIdaif: Produces model fit for four-parameter fdg model. For use with scipy.optimize.curvefit
+writeText: Simple wrapper for numpy.savetxt
+flowTwoIdaif: Produces model fit for two-paramter water model. 
+flowThreeDelay: Produces model fit for two-paramter water model with delay. 
+flowTwoSet: Produces model fit for two-parameter water model with fixed delay and dispersion.
+flowFour: Produces model fit for two-parameter water model with variable delay and dispersion.
+flowFourMl: Returns the negative log-likelihood for two-parameter model water model with variable delay and dispersion.
+flowThreeIdaif: Produces model fit for three-parameter water model (volume component). 
+gluThreeIdaif: Produces model fit for three-parameter fdg model. 
+gluIdaifLin: Calculates model fit for linearized version of three-parameter fdg model
+gluGefIdaif: COmputes model fit for three-parameter FDG model while using CBF to estimate GEF
+gluFourIdaif: Produces model fit for four-parameter fdg model. 
 oefCalcIdaif: Calculates OEF using the stanard Mintun model. 
-oxyOneIdaif: Procuces model fit for one-parameter Mintun oxygen model. For use with sci.py.optimize.curvefit
-tfceCalc: Calculates threshold free cluster enhancement for a statistic image
+oxyOneIdaif: Procuces model fit for one-parameter Mintun oxygen model given CBF, lambda, and CBV. 
+tfceScore: Calculates threshold free cluster enhancement for a statistic image. Not complete
 rSplineBasis: Produces a restricted spline basis and its derivatives
 knotLoc: Determines location of knots for cubic spline using percentiles
 
@@ -229,7 +237,6 @@ def flowTwoIdaif(X,flow,lmbda=1):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-flow/lmbda*X[0,:]))*(X[0,1]-X[0,0])
 	return flowConv[0:X.shape[1]]
 
-
 def flowThreeDelay(aifInterp):
 
 	"""
@@ -277,7 +284,7 @@ def flowThreeDelay(aifInterp):
 		"""
 		
 		#Remove delay form input function
-		cAif = aifInterp(petTime+delta)
+		cAif = aifInterp(petTime+delta) * np.exp(np.log(2)/122.24*delta)
 
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
@@ -420,7 +427,6 @@ def flowFour(aifCoef,aifKnots):
 	#Return function
 	return flowPred
 
-
 def flowFourMl(aifCoef,aifKnots,petTime,petTac):
 
 	"""
@@ -524,7 +530,6 @@ def flowThreeIdaif(X,flow,kTwo,vZero):
 	flowPred = flowConv + (vZero*X[1,:])
 	return flowPred
 
-#Function to fit fdg tracer data using three-parameter convolution model. X[0,:] is time and X[1,:] is idaif
 def gluThreeIdaif(X,kOne,kTwo,kThree):
 	"""
 	
@@ -581,7 +586,6 @@ def gluIdaifLin(X,bOne,bTwo,bThree):
 
 	return bOne*X[0,:] + bTwo*X[1,:] + bThree*X[2,:]
 	
-
 def gluGefIdaif(cbf):
 
 	"""
@@ -635,7 +639,6 @@ def gluGefIdaif(cbf):
 	#Return function
 	return gluPred
 
-#Function to fit fdg tracer data using four-parameter convolution model
 def gluFourIdaif(X,kOne,kTwo,kThree,kFour):
 	"""
 	
@@ -672,7 +675,6 @@ def gluFourIdaif(X,kOne,kTwo,kThree,kFour):
 	cI = np.convolve(cLeft*(cMiddle+cRight),X[1,:])[0:X.shape[1]]*minTime
 	return cI
 
-#Function to calculate OEF given an oxygen timecourse and values for CBF, CBV and lambda
 def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
 	
 	"""
@@ -719,7 +721,69 @@ def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
 	#Calculate EOF using the standard Mintun method
 	return ( petInteg - (cbf*waterExpInteg) - (cbv*R*oxyInteg) ) / ( (cbf*oxyExpInteg) - (cbv*R*0.835*oxyInteg) )
 
-#Function to calculate TFCE score for statistic image
+def oxyOneIdaif(flow,lmbda,cbv,R):
+	
+	"""
+	
+	Produces a model fit function for scipy curvefit
+
+	Parameters
+	----------
+
+	flow: float
+	   Estimate of cerebral blood flow
+	lmbda: float
+	   Estimate of blood brian partieint coeficient
+	cbv: float
+	   Estimate of CBV
+	R: float
+	   Ratio of small-vessel to large vessel hematocrit
+	
+
+	Returns
+	-------
+	oxyPred: function
+		A function that will return the Mintun model predictions given inputs X and E 
+	
+	"""
+	
+	#Actual model prediction function
+	def oxyPred(X,E):
+
+		"""
+	
+		Calculates the model predictions
+
+		Parameters
+		----------
+
+		X: array
+	   	   A 3,n array containing pet times, oxygen input function, and water input function
+		E: float
+		   Oxygen extraction fraction
+	
+
+		Returns
+		-------
+		cT: array of length n
+	  	   Model predictions for Mintun oxygen model give input parameters
+	
+		"""
+
+		#Get sampling time and number of time points
+		sampTime = X[0,1] - X[0,0]
+		nTime = X.shape[1]
+
+		#Calculate components of model
+		cOne = cbv*R*(1-(E*0.835))*X[1,:]
+		cTwo = flow*np.convolve(X[2,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
+		cThree = flow*E*np.convolve(X[1,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
+
+		#Return model predictions
+		return cOne + cTwo + cThree
+
+	return oxyPred
+
 def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
 	
 	"""
@@ -786,7 +850,6 @@ def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
 	tfceFull[mask>0] = tfceScore
 	return tfceFull
 
-#Produces a restricted cubic spline basis and its derivatives
 def rSplineBasis(X,knots):
 	
 	"""
@@ -850,7 +913,6 @@ def rSplineBasis(X,knots):
 	
 	return basis, deriv
 	
-#Calculates knot locations for cubic spline using percentiles
 def knotLoc(X,nKnots):
 	
 	"""
@@ -903,69 +965,7 @@ def knotLoc(X,nKnots):
 	
 	return knots
 
-#Creates optimization function scipy curve fit
-def oxyOneIdaif(flow,lmbda,cbv,R):
-	
-	"""
-	
-	Produces a model fit function for scipy curvefit
 
-	Parameters
-	----------
-
-	flow: float
-	   Estimate of cerebral blood flow
-	lmbda: float
-	   Estimate of blood brian partieint coeficient
-	cbv: float
-	   Estimate of CBV
-	R: float
-	   Ratio of small-vessel to large vessel hematocrit
-	
-
-	Returns
-	-------
-	oxyPred: function
-		A function that will return the Mintun model predictions given inputs X and E 
-	
-	"""
-	
-	#Actual model prediction function
-	def oxyPred(X,E):
-
-		"""
-	
-		Calculates the model predictions
-
-		Parameters
-		----------
-
-		X: array
-	   	   A 3,n array containing pet times, oxygen input function, and water input function
-		E: float
-		   Oxygen extraction fraction
-	
-
-		Returns
-		-------
-		cT: array of length n
-	  	   Model predictions for Mintun oxygen model give input parameters
-	
-		"""
-
-		#Get sampling time and number of time points
-		sampTime = X[0,1] - X[0,0]
-		nTime = X.shape[1]
-
-		#Calculate components of model
-		cOne = cbv*R*(1-(E*0.835))*X[1,:]
-		cTwo = flow*np.convolve(X[2,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
-		cThree = flow*E*np.convolve(X[1,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
-
-		#Return model predictions
-		return cOne + cTwo + cThree
-
-	return oxyPred
 
 
 
