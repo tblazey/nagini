@@ -903,18 +903,21 @@ def rSplineBasis(X,knots,integ=False):
 
 		#First part of basis function
 		termOne = np.maximum(0,np.power(X-knots[knotIdx],3))
-		termOneD = np.maximum(0,np.power(X-knots[knotIdx],2)*3) * np.sign(termOne)
+		signOne = np.sign(termOne)
+		termOneD = np.power(X-knots[knotIdx],2) * 3.0 * signOne
 		
 		#Second part of basis function
 		scaleD = (knots[nKnots-1]-knots[nKnots-2])
 		twoScale = (knots[nKnots-1]-knots[knotIdx]) / scaleD 
-		termTwo = np.maximum(0,np.power(X-knots[nKnots-2],3)) * twoScale          
-		termTwoD = np.maximum(0,np.power(X-knots[nKnots-2],2)*3) * twoScale * np.sign(termTwo) 
+		termTwo = np.maximum(0,np.power(X-knots[nKnots-2],3)) * twoScale
+		signTwo = np.sign(termTwo)
+		termTwoD = np.power(X-knots[nKnots-2],2) * 3.0 * twoScale * signTwo
 		
 		#You get the drill
 		threeScale = (knots[nKnots-2]-knots[knotIdx]) / scaleD
-		termThree = np.maximum(0,np.power(X-knots[nKnots-1],3)) * threeScale		    
-		termThreeD = np.maximum(0,np.power(X-knots[nKnots-1],2)*3) * threeScale	* np.sign(termThree)
+		termThree = np.maximum(0,np.power(X-knots[nKnots-1],3)) * threeScale
+		signThree = np.sign(termThree)
+		termThreeD = np.power(X-knots[nKnots-1],2) * 3.0 * threeScale * signThree
 		
 		#Compute the basis function. 
 		basis[:,knotIdx+2] =  termOne - termTwo + termThree
@@ -924,9 +927,9 @@ def rSplineBasis(X,knots,integ=False):
 		
 		#Compute integral if necessary
 		if integ is True: 
-			termOneInt = np.maximum(0,np.power(X-knots[knotIdx],4)*0.25) * np.sign(termOne)
-			termTwoInt = np.maximum(0,np.power(X-knots[nKnots-2],4)*0.25) * twoScale * np.sign(termTwo)
-			termThreeInt = np.maximum(0,np.power(X-knots[nKnots-1],4)*0.25) * threeScale * np.sign(termThree)
+			termOneInt = np.power(X-knots[knotIdx],4) * 0.25 * signOne
+			termTwoInt = np.power(X-knots[nKnots-2],4) * 0.25 * twoScale * signTwo
+			termThreeInt = np.power(X-knots[nKnots-1],4) * 0.25 * threeScale * signThree
 			aDeriv[:,knotIdx+2] = termOneInt - termTwoInt + termThreeInt
 			
 	#Return appropriate basis set
