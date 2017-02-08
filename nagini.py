@@ -349,9 +349,6 @@ def flowTwoSet(aifCoef,aifKnots,delta,tau):
 		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
 		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
 
-		#Add in decay correction basis upon delay
-		cAif = cAif * np.exp(np.log(2)/122.24*delta)
-
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
 		
@@ -414,9 +411,6 @@ def flowFour(aifCoef,aifKnots):
 		#Remove delay and dispersion from input function while using spline interpolation
 		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
 		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
-
-		#Add in decay correction basis upon delay
-		cAif = cAif * np.exp(np.log(2)/122.24*delta)
 
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
@@ -484,9 +478,6 @@ def flowFourMl(aifCoef,aifKnots,petTime,petTac):
 		#Remove delay and dispersion from input function while using spline interpolation
 		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
 		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
-
-		#Add in decay correction basis upon delay
-		cAif = cAif * np.exp(np.log(2)/122.24*delta)
 
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))[0:petTime.shape[0]]*(petTime[1]-petTime[0])
