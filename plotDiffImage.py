@@ -6,7 +6,7 @@
 
 import argparse, sys
 argParse = argparse.ArgumentParser(description='Quick multiview image creator for postive/negative images')
-argParse.add_argument('img',help='Positive p-value image',nargs=1,type=str)
+argParse.add_argument('img',help='Difference image',nargs=1,type=str)
 argParse.add_argument('out',help='Name for output image',nargs=1,type=str)
 argParse.add_argument('-mVal',help='Value not to show when plotting. Default is 0',default=0.0,type=float)
 argParse.add_argument('-pTitle',help='Title for positive colorbar',nargs=1,type=str)
@@ -21,6 +21,7 @@ argParse.add_argument('-z',help='Slice to plot in z dimension. Default is halfwa
 argParse.add_argument('-f',help='Frame to plot. Starts at 0. Default is 0',type=int,default=0)
 argParse.add_argument('-struct',help='Structural image for underlay',nargs=1,type=str)
 argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1,type=float,default=[1.0])
+argParse.add_argument('-scale',help='Scale difference image by specified amount',nargs=1,type=float)
 argParse.set_defaults(showMin=False,showMax=True)
 args = argParse.parse_args()
 
@@ -44,6 +45,10 @@ if nImgDim !=3 and nImgDim !=4:
 
 #Get the actual image data
 imgData =img.get_data()
+
+#Scale the data if necessary
+if args.scale is not None:
+	imgData = imgData * args.scale[0]
 
 #Get positive and negative data
 pData = np.zeros_like(imgData); pData[imgData>0] = imgData[imgData>0]

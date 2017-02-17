@@ -50,7 +50,8 @@ argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for flow parameter. Default is 10 times whole brain value')
-argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for lambda parameter. Default is 0 to 1.')
+argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for lambda parameter. Default is 0 to 2.')
+argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -94,14 +95,15 @@ petMasked = nagini.reshape4d(petData)[brainData.flatten()>0,:]
 #Use middle times as pet time. Account for any offset
 petTime = info[:,1] - info[0,0]
 
-#Interpolate the aif to minimum sampling time
+#Get interpolation times as start to end of pet scan with aif sampling rate
 minTime = np.min(np.diff(petTime))
-interpTime = np.arange(petTime[0],petTime[-1],minTime)
-aifInterp = interp.interp1d(petTime,idaif,kind="linear")(interpTime)
+interpTime = np.arange(petTime[0],np.ceil(petTime[-1]+minTime),minTime)
+
+#Interpolate the AIF
+aifInterp = interp.interp1d(petTime,idaif,kind="linear",fill_value="extrapolate")(interpTime)
 
 #Get the whole brain tac and interpolate that
 wbTac = np.mean(petMasked,axis=0)
-wbInterp = interp.interp1d(petTime,wbTac,kind="linear")(interpTime)
 
 ###################
 ###Model Fitting###
@@ -109,11 +111,37 @@ wbInterp = interp.interp1d(petTime,wbTac,kind="linear")(interpTime)
 print ('Beginning fitting procedure...')
 
 #Attempt to fit model to whole-brain curve
-fitX = np.vstack((interpTime,aifInterp))
+wbFunc = nagini.flowTwo(interpTime,aifInterp)
 try:
-	wbFit = opt.curve_fit(nagini.flowTwoIdaif,fitX,wbInterp,bounds=([0,0],[np.inf,1]))
+	wbFit = opt.curve_fit(wbFunc,petTime,wbTac,bounds=([0,0],[np.inf,2]))
 except(RuntimeError):
 	print 'ERROR: Cannot estimate two-parameter model on whole-brain curve. Exiting...'
+	sys.exit()
+
+#Get whole brain fitted values
+wbFitted = wbFunc(petTime,wbFit[0][0],wbFit[0][1])
+
+#Create string for whole-brain parameter estimates
+wbString = 'CBF=%f\nLambda=%f'%(wbFit[0][0]*6000/args.d,wbFit[0][1]/args.d)
+
+#Write out whole-brain results
+try:
+	#Parameter estimates
+	wbOut = open('%s_wbVals.txt'%(args.out[0]), "w")
+	wbOut.write(wbString)
+	wbOut.close()
+
+	#Whole-brain tac
+	np.savetxt('%s_wbTac.txt'%(args.out[0]),wbTac)
+
+	#Whole-brain fitted values
+	np.savetxt('%s_wbFitted.txt'%(args.out[0]),wbFitted)
+except(IOError):
+	print 'ERROR: Cannot write in output directory. Exiting...'
+	sys.exit()
+
+#Don't do voxelwise estimation if user says not to
+if args.wbOnly == 1:
 	sys.exit()
 
 #Use whole-brain values as initilization
@@ -135,27 +163,26 @@ for bound in [args.fBound,args.lBound]:
 nVox = petMasked.shape[0]; fitParams = np.zeros((nVox,5)); noC = 0;
 for voxIdx in tqdm(range(nVox)):
 	
-	#Get voxel tac and then interpolate it
+	#Get voxel tac
 	voxTac = petMasked[voxIdx,:]
-	voxInterp = interp.interp1d(petTime,voxTac,kind="linear")(interpTime)
-
+	
 	try:
 		#Get voxel fit with two parameter model
-		voxFit = opt.curve_fit(nagini.flowTwoIdaif,fitX,voxInterp,p0=init,bounds=bounds)
+		voxFit = opt.curve_fit(wbFunc,petTime,voxTac,p0=init,bounds=bounds)
 		
 		#Save parameter estimates
 		fitParams[voxIdx,0] = voxFit[0][0] * 6000.0/args.d
-		fitParams[voxIdx,1] = voxFit[0][1] * args.d
+		fitParams[voxIdx,1] = voxFit[0][1] / args.d
 		
 		#Save parameter variance estimates
 		fitVar = np.diag(voxFit[1])
 		fitParams[voxIdx,2] = fitVar[0] * np.power(6000.0/args.d,2)
-		fitParams[voxIdx,3] = fitVar[1] * np.power(args.d,2)
+		fitParams[voxIdx,3] = fitVar[1] * np.power(1/args.d,2)
 
 		#Get normalized root mean square deviation
-	 	fitResid = voxInterp - nagini.flowTwoIdaif(fitX,voxFit[0][0],voxFit[0][1])
-		fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
-		fitParams[voxIdx,4] = fitRmsd / np.mean(voxInterp)
+	 	fitResid = voxTac - wbFunc(petTime,voxFit[0][0],voxFit[0][1])
+		fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0])
+		fitParams[voxIdx,4] = fitRmsd / np.mean(voxTac)
 
 	except(RuntimeError):
 		noC += 1
@@ -172,7 +199,7 @@ print('Writing out results...')
 #Write out two parameter model images
 imgNames = ['flow','lambda','flow_var','lambda_var','nRmsd']
 for iIdx in range(len(imgNames)):
-	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],imgNames[iIdx]))
+	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],imgNames[iIdx]))
 
 
 
