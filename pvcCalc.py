@@ -9,6 +9,8 @@ arg_parse.add_argument('out',help='Root for output image',nargs=1)
 arg_parse.add_argument('-fwhm',help='FWHM for PET PSF in mm. Default is 8.0',nargs=1,type=float,default=[8.0])
 arg_parse.add_argument('-mask',help='Mask for RBV image',nargs=1)
 arg_parse.add_argument('-noZero',help='Do not count 0 as a seperate ROI',action='store_const',const=1)
+arg_parse.add_argument('-nii',help='Output RSF ROI averages as a ROIx1x1xTime Nifti file. Default is text file',action='store_const',const=1)
+arg_parse.add_argument('-weight',help='Input previously calculated w weight matrix',nargs=1)
 args = arg_parse.parse_args()
 
 #Import libraries
@@ -44,7 +46,6 @@ if args.mask is not None:
 		maskData = maskData[:,:,:,0]
 else:
 	maskData = np.ones((seg.shape[0],seg.shape[1],seg.shape[2]))
-	
 
 #Load in image data
 petData = pet.get_data()
@@ -72,7 +73,17 @@ if args.noZero == 1:
 nRoi = roiList.shape[0]
 
 #Make weight matrices
-wMatrix = np.zeros((nRoi,nRoi),dtype=np.float64)
+if args.weight is not None:
+
+	#Load w matrix
+	wMatrix = np.loadtxt(args.weight[0])
+
+	#Check to make sure w matrix is the correct size
+	if wMatrix.shape[0] != nRoi or wMatrix.shape[1] != nRoi:
+		print 'Dimensions of %s do not much the number of ROIs. Exiting...'%(args.weight[0])
+		sys.exit()
+else:
+	wMatrix = np.zeros((nRoi,nRoi),dtype=np.float64)
 tMatrix = np.zeros((nRoi,nPet),dtype=np.float64)
 
 #Determine smoothing values for each dimension.
@@ -88,28 +99,33 @@ for iIdx in tqdm(range(nRoi),desc='Creating SGTM Matrix'):
 	#Smooth i ROI for the first time
 	iSmooth = filt.gaussian_filter(iRoi,sigmas).flatten()
 
-	#Get diagonal weight
-	wMatrix[iIdx,iIdx] = iSmooth.dot(iSmooth)
-
 	#Calculate t-values
 	for petIdx in range(nPet):
 		tMatrix[iIdx,petIdx] = iSmooth.dot(petData[:,petIdx])
 
-	#Smooth i ROI again
-	iSmooth = filt.gaussian_filter(iSmooth.reshape((seg.shape[0],seg.shape[1],seg.shape[2])),sigmas).flatten()
+	#Calculate w-matrix if necessary
+	if args.weight is None:
+		
+		#Set diagonal weight
+		wMatrix[iIdx,iIdx] = iSmooth.dot(iSmooth)
 
-	for jIdx in range(iIdx,nRoi):
+		#Smooth i ROI again
+		iSmooth = filt.gaussian_filter(iSmooth.reshape((seg.shape[0],seg.shape[1],seg.shape[2])),sigmas).flatten()
 
-		#Make j ROI
-		jRoi = np.float64(np.where(segFlat==roiList[jIdx],1.0,0.0))
+		#Loop thorugh other ROIs
+		for jIdx in range(iIdx,nRoi):
 
-		#Get weight
-		wMatrix[iIdx,jIdx] = iSmooth.dot(jRoi)
-		wMatrix[jIdx,iIdx] = wMatrix[iIdx,jIdx]
+			#Make j ROI
+			jRoi = np.float64(np.where(segFlat==roiList[jIdx],1.0,0.0))
 
+			#Get weight
+			wMatrix[iIdx,jIdx] = iSmooth.dot(jRoi)
+			wMatrix[jIdx,iIdx] = wMatrix[iIdx,jIdx]
+	
 
 #Save weight matricies
-nagini.writeText('%s_wMatrix.txt'%(args.out[0]),wMatrix)
+if args.weight is None:
+	nagini.writeText('%s_wMatrix.txt'%(args.out[0]),wMatrix)
 nagini.writeText('%s_tMatrix.txt'%(args.out[0]),tMatrix)
 
 #Reshape pet data back
@@ -132,8 +148,12 @@ for petIdx in tqdm(range(nPet),desc='Calculating PVC values'):
 	rsfSmooth =  filt.gaussian_filter(rsfData,sigmas) * maskData
 	rbvData[:,:,:,petIdx] = np.ma.divide(petData[:,:,:,petIdx] * rsfData,np.ma.array(rsfSmooth,mask=rsfSmooth==0))
 
-#Save coefficients
-nagini.writeText('%s_rsfAvg.txt'%(args.out[0]),roiCoef)
+#Save coefficients in the format user wants.
+if args.nii == 1:
+	avg = nib.Nifti1Image(roiCoef.reshape((nRoi,1,1,nPet)),np.identity(4))
+	avg.to_filename('%s_rsfAvg.nii.gz'%(args.out[0]))
+else:
+	nagini.writeText('%s_rsfAvg.txt'%(args.out[0]),roiCoef)
 
 #Save RBV image
 rbv = nib.Nifti1Image(rbvData,seg.affine)
