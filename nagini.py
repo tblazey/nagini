@@ -17,25 +17,26 @@ loadInfo: Reads in Yi Su style info file
 writeText: Simple wrapper for numpy.savetxt
 flowTwoIdaif: Produces model fit for two-paramter water model. 
 flowThreeDelay: Produces model fit for two-paramter water model with delay. 
-flowTwoSet: Produces model fit for two-parameter water model with fixed delay and dispersion.
 flowFour: Produces model fit for two-parameter water model with variable delay and dispersion.
 flowFourMl: Returns the negative log-likelihood for two-parameter model water model with variable delay and dispersion.
 flowThreeIdaif: Produces model fit for three-parameter water model (volume component). 
 gluThreeIdaif: Produces model fit for three-parameter fdg model. 
 gluIdaifLin: Calculates model fit for linearized version of three-parameter fdg model
-gluGefIdaif: COmputes model fit for three-parameter FDG model while using CBF to estimate GEF
+gluGefIdaif: Computes model fit for three-parameter FDG model while using CBF to estimate GEF
 gluFourIdaif: Produces model fit for four-parameter fdg model. 
 oefCalcIdaif: Calculates OEF using the stanard Mintun model. 
 oxyOneIdaif: Procuces model fit for one-parameter Mintun oxygen model given CBF, lambda, and CBV. 
 tfceScore: Calculates threshold free cluster enhancement for a statistic image. Not complete
-rSplineBasis: Produces a restricted spline basis and its derivatives
+rSplineBasis: Produces a restricted spline basis withs options for derivaties and integrals
 knotLoc: Determines location of knots for cubic spline using percentiles
+saveGz: Saves a gzipped .npy file
 
 
 """
 
 #What libraries do we need
 import numpy as np, nibabel as nib, sys, scipy.ndimage as img
+import scipy.interpolate as interp, subprocess as sub, pystan
 
 ###############
 ###Functions###
@@ -65,7 +66,7 @@ def loadHeader(path):
 		sys.exit()
 	return header
 
-def writeMaskedImage(data,outDims,mask,affine,name):
+def writeMaskedImage(data,outDims,mask,affine,header,name):
 	"""
 	
 	Writes out an masked image
@@ -79,7 +80,9 @@ def writeMaskedImage(data,outDims,mask,affine,name):
 	mask : array
 	   Numpy array that originally masked data
 	affine : array
-	   Nibabel affine matrix for mask image
+	   Nibabel affine matrix for data
+	header : struct
+	   Nibabel header for data
 	name : string
 	   Output filename. Will append .nii.gz by default 
 
@@ -91,7 +94,7 @@ def writeMaskedImage(data,outDims,mask,affine,name):
 	outData = outData.reshape(outDims)
 
 	#Create image to write out
-	outImg = nib.Nifti1Image(outData,affine)
+	outImg = nib.Nifti1Image(outData,affine,header=header)
 	
 	#Then do the writing
 	outName = '%s.nii.gz'%(name)
@@ -125,7 +128,7 @@ def loadIdaif(iPath):
 		sys.exit()
 	return idaif
 
-def loadAif(aPath):
+def loadAif(aPath,dcv=False):
 	"""
 	
 	Loads in text file with AIF values
@@ -134,6 +137,8 @@ def loadAif(aPath):
 	----------
 	aPath : string
 	   Path to AIF text file
+	dcv : logical
+	   Indicates whether input function is DCV format. 
 
 	Returns
 	-------
@@ -143,7 +148,10 @@ def loadAif(aPath):
 	"""
 	
 	try:
-		aif = np.loadtxt(aPath,skiprows=2,usecols=[0,1])
+		if dcv is False:
+			aif = np.loadtxt(aPath,skiprows=2,usecols=[0,1])
+		else:
+			aif = np.loadtxt(aPath,skiprows=1,usecols=[0,1])
 	except (IOError):
 		print 'ERROR: Cannot load idaif at %s'%(aPath)
 		sys.exit()
@@ -237,17 +245,78 @@ def flowTwoIdaif(X,flow,lmbda=1):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-flow/lmbda*X[0,:]))*(X[0,1]-X[0,0])
 	return flowConv[0:X.shape[1]]
 
-def flowThreeDelay(aifInterp):
+def flowTwo(aifTime,cAif):
 
 	"""
 	
-	Produces a three parameter blood flow model fit function for scipy curvefit
-
 	Parameters
 	----------
 
-	aifCoef: function
-		Interpolation function for AIF
+	aifTime: array
+	   A n length array of AIF sample times
+	cAif: array
+	   A n lenght array of AIF values at aifTime
+
+	Returns
+	-------
+	flowPred: function
+		A function that will return the two-parameter blood flow predictions 
+		given pet time, flow and lambda
+	
+	"""
+
+	def flowPred(petTime,flow,lmbda):
+
+			
+		"""
+	
+		Produces a two parameter blood flow model fit function for scipy curvefit
+
+		Parameters
+		----------
+
+		petTime: array
+	   		An n length array pet time points
+		flow: float
+	  		Blood flow parameter
+		lmbda: float
+			Blood brain paritition coefficient parameter
+
+		Returns
+		-------
+		petPred: array
+			A n length array of model predictions given parameters
+	
+		"""
+		
+		#Calculate model prediciton
+		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*aifTime))*(aifTime[1]-aifTime[0])
+		
+		#Interpolate predicted response at pet times. Much slower than just interpolating pet data, but I like this better.
+		if np.all(aifTime==petTime):
+			petPred = flowConv[0:aifTime.shape[0]]
+		else:
+			petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTime)
+	
+		#Return predictions		
+		return petPred
+	
+	#Return function
+	return flowPred
+
+def flowThreeDelay(aifCoef,aifKnots,aifTime):
+
+	"""
+	
+	Parameters
+	----------
+
+	aifCoef: array
+	   An n length array of coefficients for natural cubic spline
+	aifKnots: array
+	   A n length array of knot locations for natural cubic spline
+	aifTime: array
+	   A n length array of times to samples AIF at
 
 	Returns
 	-------
@@ -278,24 +347,29 @@ def flowThreeDelay(aifInterp):
 
 		Returns
 		-------
-		flowConv: array
+		petPred: array
 			A n length array of model predictions given parameters
 	
 		"""
 		
-		#Remove delay form input function
-		cAif = aifInterp(petTime+delta) * np.exp(np.log(2)/122.24*delta)
+		#Remove delay from input function while using spline interpolation
+		cBasis = rSplineBasis(aifTime+delta,aifKnots)
+		cAif = np.dot(cBasis,aifCoef)
 
 		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
+		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*aifTime))*(aifTime[1]-aifTime[0])
 		
-		#Return predictions
-		return flowConv[0:petTime.shape[0]]
+		#Interpolate predicted response at pet times. Much slower than just interpolating pet data, but I like this better.	
+		petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTime)
+	
+		#Return predictions		
+		return petPred
 	
 	#Return function
 	return flowPred
 
-def flowTwoSet(aifCoef,aifKnots,delta,tau):
+
+def flowFour(aifCoef,aifKnots,aifTime):
 
 	"""
 	
@@ -308,72 +382,8 @@ def flowTwoSet(aifCoef,aifKnots,delta,tau):
 	   An n length array of coefficients for natural cubic spline
 	aifKnots: array
 	   A n length array of knot locations for natural cubic spline
-	delta: float
-		Input function shift
-	tau: float
-		Input function disperison
-
-	Returns
-	-------
-	flowPred: function
-		A function that will return the four-parameter blood flow predictions 
-		given pet time, flow, and lambda
-	
-	"""
-
-	def flowPred(petTime,flow,lmbda):
-
-			
-		"""
-	
-		Produces a four parameter blood flow model fit function for scipy curvefit
-
-		Parameters
-		----------
-
-		petTime: array
-	   		An n length array pet time points
-		flow: float
-	  		Blood flow parameter
-		lmbda: float
-			Blood brain paritition coefficient parameter
-
-		Returns
-		-------
-		flowConv: array
-			A n length array of model predictions given parameters
-	
-		"""
-		
-		#Remove delay and dispersion from input function while using spline interpolation
-		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
-		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
-
-		#Add in decay correction basis upon delay
-		cAif = cAif * np.exp(np.log(2)/122.24*delta)
-
-		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
-		
-		#Return predictions
-		return flowConv[0:petTime.shape[0]]
-	
-	#Return function
-	return flowPred
-
-def flowFour(aifCoef,aifKnots):
-
-	"""
-	
-	Produces a four parameter blood flow model fit function for scipy curvefit
-
-	Parameters
-	----------
-
-	aifCoef: array
-	   An n length array of coefficients for natural cubic spline
-	aifKnots: array
-	   A n length array of knot locations for natural cubic spline
+        aifTime: array
+	   A m length array giving times to sample AIF at
 
 	Returns
 	-------
@@ -392,7 +402,6 @@ def flowFour(aifCoef,aifKnots):
 
 		Parameters
 		----------
-
 		petTime: array
 	   		An n length array pet time points
 		flow: float
@@ -406,23 +415,23 @@ def flowFour(aifCoef,aifKnots):
 
 		Returns
 		-------
-		flowConv: array
+		petPred: array
 			A n length array of model predictions given parameters
 	
 		"""
 		
 		#Remove delay and dispersion from input function while using spline interpolation
-		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
+		cBasis, cBasisD = rSplineBasis(aifTime+delta,aifKnots,dot=True)
 		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
 
-		#Add in decay correction basis upon delay
-		cAif = cAif * np.exp(np.log(2)/122.24*delta)
-
 		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))*(petTime[1]-petTime[0])
+		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*aifTime))*(aifTime[1]-aifTime[0])
 		
-		#Return predictions
-		return flowConv[0:petTime.shape[0]]
+		#Interpolate predicted response at pet times. Much slower than just interpolating pet data, but I like this better.	
+		petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTime)
+	
+		#Return predictions		
+		return petPred
 	
 	#Return function
 	return flowPred
@@ -482,11 +491,8 @@ def flowFourMl(aifCoef,aifKnots,petTime,petTac):
 		flow = params[0]; lmbda = params[1]; delta = params[2]; tau = params[3]; sigma = params[4]
 
 		#Remove delay and dispersion from input function while using spline interpolation
-		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots)
+		cBasis, cBasisD = rSplineBasis(petTime+delta,aifKnots,dot=True)
 		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
-
-		#Add in decay correction basis upon delay
-		cAif = cAif * np.exp(np.log(2)/122.24*delta)
 
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*petTime))[0:petTime.shape[0]]*(petTime[1]-petTime[0])
@@ -501,6 +507,74 @@ def flowFourMl(aifCoef,aifKnots,petTime,petTac):
 	
 	#Return function
 	return flowLl
+
+
+def mixedLl(varCoefs,X,Z,y,coefs=False,const=False):
+	"""
+
+	Returns the restricted negative log-likelihood for a very, very basic linear mixed effects model
+
+	Parameters
+	----------
+	varCoefs : vector
+		A 2x1 numpy array for the variance parameters to be estimated
+	X : matrix
+		a mxn numpy matrix of fixed effects regressors
+	Z : matrix
+		a mxp numpy matrix of random effects regressors
+	y : vector
+                a mx1 numpy array of aif to fit
+	coefs : logical
+		If true, returns fixed and random effects along with log-likelihood
+	const = logical
+		If true, returns adds in constant part to log-likelihood
+
+	Returns
+	-------
+	rLogLik : float
+		 Restricted negative log-likelihood for model
+	B : array
+		If coefs = True, a n x 1 array of fixed effects
+	b : array
+		If coefs = True, a m x 1 array of random effects
+	
+	"""
+
+	##Check to see data in input correctly
+	print varCoefs
+	nData = y.shape[0]
+	if  X.shape[0] != nData or Z.shape[0] != nData:
+		print 'ERROR: Number of rows in fixed and/or random effects does not match y'
+		sys.exit()
+
+	#Get random effects covariance matrix
+	nR = Z.shape[1]
+	D = np.identity(nR)*varCoefs[0]
+	V = Z.dot(D).dot(Z.T) + np.identity(nData)*varCoefs[1]
+
+	#Get inverse of total covariance matrix
+	W = np.linalg.inv(V)
+
+	#Get beta estimates
+	B = np.linalg.inv(X.T.dot(W).dot(X)).dot(X.T).dot(W).dot(y)
+
+	#Calculate residuals
+	resid = y - np.dot(X,B)
+
+	#Calculate restricted log-likelihood. 
+	wSign,wLogDet = np.linalg.slogdet(W)
+	hSign,hLogDet = np.linalg.slogdet(X.T.dot(W).dot(X))
+	rLogLik = (0.5*wSign*wLogDet) - \
+                  (0.5*resid.T.dot(W).dot(resid)) - \
+		  (0.5*hSign*hLogDet)
+	if const is True: rLogLik += -nData/2.0*np.log(2.0*np.pi)
+
+	#Return log-likilihood and estimates if necessary	
+	if coefs == True:	
+		b = D.dot(Z.T).dot(W).dot(resid)
+		return -rLogLik,B,b 
+	else:
+		return -rLogLik
 
 def flowThreeIdaif(X,flow,kTwo,vZero):
 	"""
@@ -529,6 +603,76 @@ def flowThreeIdaif(X,flow,kTwo,vZero):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-kTwo*X[0,:]))[0:X.shape[1]]*(X[0,1]-X[0,0])
 	flowPred = flowConv + (vZero*X[1,:])
 	return flowPred
+
+def gluThree(aifTime,aifC,cbf=None):
+	"""
+	
+	Returns a prediction function for optimization of three-parameter glucose model
+
+	Parameters
+	----------
+	aifTime: vector
+		A nx1 vector of AIF samples times
+	aifC: vector
+		A nx1 vector of with the AIF data
+	cbf: real
+		Optional scale represnting CBF at voxel. If set, then we estimate GEF.
+
+	Returns
+	-------
+	gluPred : function
+	   A function that returns three-parameter model prediction given a vector of pet times, and k1,k2, and k3
+	
+	"""
+	
+	def gluPred(petTime,pOne,kTwo,kThree):
+		"""
+	
+		Returns a prediction function for optimization of three-parameter glucose model
+
+		Parameters
+		----------
+		petTime: vector
+			A mx1 vector of pet sample times
+		pOne: float
+			kOne parameter if cbf is None. Otherwise it is GEF.
+		kTwo: float
+			kTwo parameter
+		kThree: float
+			kThree parameter
+
+		Returns
+		-------
+		petPred : vector
+	  		 A mx1 vector of model predictions given petTime and the rate constants kOne,kTwo, and kThree
+	
+		"""
+	
+		#Get minimum sampling time
+		minTime = aifTime[1]-aifTime[0]
+
+		#Convert kOne to GEF if necessary
+		if cbf is None:
+			kOne = pOne
+		else:
+			kOne = pOne*cbf
+
+		#Calculate comparmental concentrations
+   		cOne = np.convolve(aifC,kOne*np.exp(-(kTwo+kThree)*aifTime))*minTime
+		cTwo = np.convolve(aifC,((kOne*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*aifTime)))*minTime
+		cSum =  cOne[0:aifTime.shape[0]] + cTwo[0:aifTime.shape[0]]
+
+		#Interpolate predicted response at pet times if necessary.
+		if np.all(aifTime==petTime):
+			petPred = cSum
+		else:
+			petPred = interp.interp1d(aifTime,cSum,kind="linear")(petTime)
+		
+		#Return predictions
+		return petPred
+	
+	#Return prediction function	
+	return gluPred
 
 def gluThreeIdaif(X,kOne,kTwo,kThree):
 	"""
@@ -586,58 +730,6 @@ def gluIdaifLin(X,bOne,bTwo,bThree):
 
 	return bOne*X[0,:] + bTwo*X[1,:] + bThree*X[2,:]
 	
-def gluGefIdaif(cbf):
-
-	"""
-	
-	Produces a three parameter FDG model fit function for scipy curvefit. Calculates GEF.
-
-	Parameters
-	----------
-
-	cbf: float
-	   Cerebral blood flow estimate. In 1/seconds.
-
-	Returns
-	-------
-	gluPred: function
-		A function that will return the three-parameter FDG predictions 
-		given X, flow, gef, k2 and k3
-	
-	"""
-
-	def gluPred(X,gef,kTwo,kThree):
-	
-		"""
-	
-		scipy.optimize.curvefit model function for the three-parameter FDG model.
-		Does not correct for delay or dispersion of input function, so only for use with an IDAIF
-
-		Parameters
-		----------
-		X : array
-	   		A [2,n] numpy array where the first row is time and the second the input function
-		gef : float
-	   		Glucose extraction fraction
-		kTwo: float
-	  		kTwo parameter
-		kThree: float
-	   		kThree paramter
-
-		Returns
-		-------
-		cT : array
-	   		A n length array with the model predictions given flow, gef,kTwo,and kThree
-	
-		"""
-	
-		minTime = X[0,1] - X[0,0]
-   		cOne = np.convolve(X[1,:],(cbf*gef)*np.exp(-(kTwo+kThree)*X[0,:]))*minTime
-		cTwo = np.convolve(X[1,:],((cbf*gef*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*X[0,:])))*minTime
-		return cOne[0:X.shape[1]] + cTwo[0:X.shape[1]]
-	
-	#Return function
-	return gluPred
 
 def gluFourIdaif(X,kOne,kTwo,kThree,kFour):
 	"""
@@ -850,7 +942,7 @@ def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
 	tfceFull[mask>0] = tfceScore
 	return tfceFull
 
-def rSplineBasis(X,knots,integ=False):
+def rSplineBasis(X,knots,dot=False,dDot=False):
 	
 	"""
 		
@@ -862,15 +954,17 @@ def rSplineBasis(X,knots,integ=False):
 	   A array of length n containing the x-values for cubic spline basis
 	knots: array
 	   An array of length p containing knot locations
-	integ: logical
-		If True, returns integral of spline as well
+	dot: logical
+	   If true returns derivative of spline
+	dDot: logical
+	   If true returns integral of spline
 
 	Returns
 	-------
 	basis : matrix
 		an nxp basis for a restricted cubic spine
 	deriv : matrix
-		an nxp matrix of the derivaties for the basis functions
+		If deriv=True, an nxp matrix of the derivaties for the basis functions
 	integ : matrix
 		If integ=True, an nxp matrix of the integrals for the basis function
 	
@@ -882,63 +976,81 @@ def rSplineBasis(X,knots,integ=False):
 		print 'Number of knots must be at least 3'
 		sys.exit()	
 
-	#Create array to store basis matrix and derivatives
+	#Create array to store basis matrix
 	nPoints = X.shape[0]
 	basis = np.ones((nPoints,nKnots))
-	deriv = np.zeros((nPoints,nKnots))
-	if integ is True: 
+
+	#Set second basis function to x-value
+	basis[:,1] = X; 
+
+	#Setup for derivative if needed
+	if dot is True:
+		#Matrix for storing derivative results
+		deriv = np.zeros((nPoints,nKnots))
+		
+		#Compute first derivative term
+		deriv[:,1] = 1 
+	
+	#Setup for integral if needed
+	if dDot is True: 
 		
 		#Matrix for storing integral results
-		aDeriv = np.zeros((nPoints,nKnots))
+		integ = np.zeros((nPoints,nKnots))
 				
 		#Compute first integral terms
-		aDeriv[:,0] = X 
-		aDeriv[:,1] = np.power(X,2) * 0.5
+		integ[:,0] = X 
+		integ[:,1] = np.power(X,2) * 0.5
 			
-	#Set second basis function to x-value
-	basis[:,1] = X; deriv[:,1] = 1 
 	
 	#Loop through free knots
 	for knotIdx in range(nKnots-2):
 
 		#First part of basis function
 		termOne = np.maximum(0,np.power(X-knots[knotIdx],3))
-		signOne = np.sign(termOne)
-		termOneD = np.power(X-knots[knotIdx],2) * 3.0 * signOne
 		
 		#Second part of basis function
 		scaleD = (knots[nKnots-1]-knots[nKnots-2])
 		twoScale = (knots[nKnots-1]-knots[knotIdx]) / scaleD 
 		termTwo = np.maximum(0,np.power(X-knots[nKnots-2],3)) * twoScale
-		signTwo = np.sign(termTwo)
-		termTwoD = np.power(X-knots[nKnots-2],2) * 3.0 * twoScale * signTwo
 		
 		#You get the drill
 		threeScale = (knots[nKnots-2]-knots[knotIdx]) / scaleD
 		termThree = np.maximum(0,np.power(X-knots[nKnots-1],3)) * threeScale
-		signThree = np.sign(termThree)
-		termThreeD = np.power(X-knots[nKnots-1],2) * 3.0 * threeScale * signThree
-		
+
 		#Compute the basis function. 
 		basis[:,knotIdx+2] =  termOne - termTwo + termThree
 		
-		#Compute derivative.
-		deriv[:,knotIdx+2] = termOneD - termTwoD + termThreeD
+		#Figure out signs of basis functions if further calculations are necessary
+		if dot is True or dDot is True:
+			signOne = np.sign(termOne)
+			signTwo = np.sign(termTwo)
+			signThree = np.sign(termThree)
+
+		#Compute derivative if necessary
+		if dot is True:
+			termOneD = np.power(X-knots[knotIdx],2) * 3.0 * signOne
+			termTwoD = np.power(X-knots[nKnots-2],2) * 3.0 * twoScale * signTwo
+			termThreeD = np.power(X-knots[nKnots-1],2) * 3.0 * threeScale * signThree
+			deriv[:,knotIdx+2] = termOneD - termTwoD + termThreeD
 		
 		#Compute integral if necessary
-		if integ is True: 
+		if dDot is True: 
 			termOneInt = np.power(X-knots[knotIdx],4) * 0.25 * signOne
 			termTwoInt = np.power(X-knots[nKnots-2],4) * 0.25 * twoScale * signTwo
 			termThreeInt = np.power(X-knots[nKnots-1],4) * 0.25 * threeScale * signThree
-			aDeriv[:,knotIdx+2] = termOneInt - termTwoInt + termThreeInt
+			integ[:,knotIdx+2] = termOneInt - termTwoInt + termThreeInt
 			
 	#Return appropriate basis set
-	if integ is True:
-		return basis, deriv, aDeriv
-	else:	
+	if dot is True and dDot is True:
+		return basis, deriv, integ
+	elif dot is True:
 		return basis, deriv
+	elif dDot is True:
+		return basis, integ
+	else:
+		return basis
 		
-def knotLoc(X,nKnots):
+def knotLoc(X,nKnots,bounds=None):
 	
 	"""
 		
@@ -950,6 +1062,9 @@ def knotLoc(X,nKnots):
 	   A array of length n containing the x-values
 	nKnots: interger
 	  Number of knots
+	bounds: array
+		A 2 x 1 array containing percentile bounds. 
+		If not set then function uses method described below.
 
 	Returns
 	-------
@@ -971,7 +1086,9 @@ def knotLoc(X,nKnots):
 	#Set boundary knot percentiles 
 	if nKnots <= 2:
 		print 'ERROR: Number of knots must be at least 3'
-		sys.exit()	
+		sys.exit()
+	elif bounds is not None:
+		bKnots = [bounds[0],bounds[1]]	
 	elif nKnots == 3:
 		bKnots = [10,90]
 	elif nKnots >= 4 and nKnots <= 6:
@@ -990,7 +1107,153 @@ def knotLoc(X,nKnots):
 	
 	return knots
 
+def roiAvg(imgData,roiData):
+
+	"""
+		
+	Calculates ROI averages
+	
+	Parameters
+	----------
+	imgData : numpy array
+		a n or nxm array of data to get into ROIs. Zeros are ignored in average.
+	roiData: numpy array
+		a n x 1 array of where each element is a ROI index. Zero is ignored.
+
+	Returns
+	-------
+	avgData : numpy array
+		a px1 or pxm array with averages for p ROIs
+
+	
+	"""
+
+	#Reshape image data if necessary
+	imgDim = len(imgData.shape)
+	if imgDim == 1:
+		imgData = imgData.reshape((imgData.shape[0],1))
+	elif imgDim > 2:
+		print 'ERROR: Input data is not a 1d or 2d array'
+		sys.exit()
+
+	#Get unique number of ROIs. 
+	uRoi = np.unique(roiData[roiData!=0])
+	nRoi = uRoi.shape[0]
+
+	#Create empty data array
+	avgData = np.zeros((nRoi,imgData.shape[1]))
+
+	#Loop though frames
+	for fIdx in range(avgData.shape[1]):
+		
+		#Get rid of zeros in image
+		imgMask = imgData[:,fIdx] != 0
+		
+		#Loop through ROIs
+		for rIdx in range(nRoi):
+
+			#Get conjunction of ROI mask and image mask
+			roiMask = np.logical_and(roiData == uRoi[rIdx],imgMask)
+
+			#Compute mean within mask
+			avgData[rIdx,fIdx] = np.mean(imgData[roiMask,fIdx])
+
+	#Return data
+	return avgData
+
+#Create an image from ROI data
+def roiBack(avgData,roiData):
+
+	"""
+		
+	Puts ROI averages back into image space
+	
+	Parameters
+	----------
+	avgData : numpy array
+		a p x 1 or p x m array of  ROI averages
+	roiData: numpy array
+		a n x 1 array of where each element is a ROI index. Zero is ignored. Must contained m ROIs
+
+	Returns
+	-------
+	backData : numpy array
+		a nx1 or nxm array where each point is the average from its ROI
+
+	
+	"""
+
+	#Reshape average data if necessary
+	avgDim = len(avgData.shape)
+	if avgDim == 1:
+		avgData = avgData.reshape((avgData.shape[0],1))
+	elif avgDim > 2:
+		print 'ERROR: Input data is not a 1d or 2d array'
+		sys.exit()
+
+	#Get unique number of ROIs. 
+	uRoi = np.unique(roiData[roiData!=0])
+	nRoi = uRoi.shape[0]
+
+	#Make sure that the number of ROIs match
+	if avgData.shape[0] != nRoi:
+		print 'ERROR: Number of ROIs in roiData does not match dimensions of avgData.'
+		sys.exit()
+
+	#Create empty data array
+	backData = np.zeros((roiData.shape[0],avgData.shape[1]))
+	
+	#Loop through ROIs
+	for rIdx in range(nRoi):
+		
+		#Get ROI mask
+		roiMask = roiData == uRoi[rIdx]
+
+		#Set values within mask to ROI average
+		backData[roiMask,:] = avgData[rIdx,:]
+
+	#And we are done
+	return(backData)
+
+def saveGz(array,fName):
+
+	"""
+		
+	Saves and then compresses a numpy array
+	
+	Parameters
+	----------
+	array : numpy array
+	fName: file name
 
 
+	"""
+	
+	try:
+		np.save(fName,array)
+		gZip = sub.call('gzip -f %s'%(fName),shell=True)
+	except(IOError):
+		print 'ERROR: Cannot save file at %s'%(fName)
+		sys.exit()
 
+def saveRz(dic,fName):
+
+	"""
+		
+	Saves and then compresses a python dictionary in R dump format
+	
+	Parameters
+	----------
+	dic : python dictionary
+	fName: file name
+
+
+	"""
+	
+	try:
+		pystan.stan_rdump(dic,fName)
+		gZip = sub.call('gzip -f %s'%(fName),shell=True)
+	except(IOError):
+		print 'ERROR: Cannot save file at %s'%(fName)
+		sys.exit()	
 

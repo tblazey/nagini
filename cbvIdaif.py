@@ -39,7 +39,7 @@ blazey@wustl.edu
 import argparse, sys
 argParse = argparse.ArgumentParser(description='Estimates cerebral blood volume using:')
 argParse.add_argument('pet',help='Nifti CO image',nargs=1)
-argParse.add_argument('idaif',help='Image-derived input functino',nargs=1)
+argParse.add_argument('idaif',help='Image-derived input function',nargs=1)
 argParse.add_argument('brain',help='Brain mask in PET space',nargs=1)
 argParse.add_argument('out',help='Root for outputed files',nargs=1)
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
@@ -80,6 +80,6 @@ petMasked = petData.flatten()[brainData.flatten()>0]
 cbvData = (petMasked * 100.0 ) / (args.r*args.d*idaif)
 
 #Write out CBV image
-nagini.writeMaskedImage(cbvData,brain.shape,brainData,brain.affine,'%s_cbv'%(args.out[0]))
+nagini.writeMaskedImage(cbvData,brain.shape,brainData,pet.affine,pet.header,'%s_cbv'%(args.out[0]))
 
 

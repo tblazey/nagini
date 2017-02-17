@@ -5,7 +5,7 @@ import argparse
 argParse = argparse.ArgumentParser(description='Crop out excess zeros from image')
 argParse.add_argument('img',help='Image to crop',nargs=1,type=str)
 argParse.add_argument('ref',help='Reference for cropping. Usually a head mask of some sort',nargs=1,type=str)
-argParse.add_argument('-pad',help='Voxels to pad image in each dimension. Default is 3',default=[3],type=int)
+argParse.add_argument('-pad',help='Voxels to pad image in each dimension. Default is 3',default=3,type=int)
 argParse.add_argument('-refCrop',help='Crop reference image as well',action='store_const',const=1)
 args = argParse.parse_args()
 
@@ -41,8 +41,8 @@ zIdx = np.where(np.sum(refData,axis=(0,1))>0)
 #Get cropping indicies
 minIdx = np.zeros(3,dtype=np.int); maxIdx = np.zeros(3,dtype=np.int); idx = 0
 for idxs in [xIdx,yIdx,zIdx]:
-	minIdx[idx] = np.max([0,np.min(idxs)-args.pad[0]])
-	maxIdx[idx] = np.min([img.shape[idx],np.max(idxs)+args.pad[0]])
+	minIdx[idx] = np.max([0,np.min(idxs)-args.pad])
+	maxIdx[idx] = np.min([img.shape[idx],np.max(idxs)+args.pad])
 	idx += 1	
 
 #Crop image
@@ -68,6 +68,6 @@ if args.refCrop is not None:
 	refCropData = refData[minIdx[0]:maxIdx[0],minIdx[1]:maxIdx[1],minIdx[2]:maxIdx[2]]
 
 	#Write out cropped reference image
-	refCrop = nib.Nifti1Image(refCropData,ref.affine)
+	refCrop = nib.Nifti1Image(refCropData,ref.affine,header=ref.header)
 	refCrop.to_filename('%s_crop.nii.gz'%(os.path.splitext(os.path.splitext(args.ref[0])[0])[0]))
 

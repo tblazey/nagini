@@ -76,6 +76,7 @@ argParse.add_argument('-gefB',nargs=2,type=float,metavar=('lower', 'upper'),help
 argParse.add_argument('-cbv',nargs=1,help='Estimate of CBV in mL/hg. If given, corrects for blood volume.')
 argParse.add_argument('-cbf',nargs=1,help='Estimate of CBF in mL/hg/min. If given, estimates GEF.')
 argParse.add_argument('-omega',nargs=1,help='Ratio of FDG in whole brain and plasma for CBV correction. Default is 0.9',default=0.9)
+argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -148,35 +149,80 @@ if ( args.cbf is not None ):
 	#Mask it and convert it to original units
 	cbfMasked = cbfData.flatten()[brainData.flatten()>0] / 6000.0 * args.d
 
-#Interpolate the aif to minimum sampling time
+#Get interpolation times as start to end of pet scan with aif sampling rate
 minTime = np.min(np.diff(petTime))
-interpTime = np.arange(petTime[0],petTime[-1],minTime)
-aifInterp = interp.interp1d(petTime,idaif,kind="linear")(interpTime)
+interpTime = np.arange(petTime[0],np.ceil(petTime[-1]+minTime),minTime)
+
+#Interpolate the AIF
+aifInterp = interp.interp1d(petTime,idaif,kind="linear",fill_value="extrapolate")(interpTime)
 
 #Get the whole brain tac and interpolate it
 wbTac = np.mean(petMasked,axis=0)
-wbInterp = interp.interp1d(petTime,wbTac,kind="linear")(interpTime)
 
 #Set scale factor to get cmrGlu to uMole / (hg*min)
 gluScale = 333.0449 / args.d / args.lc * args.blood[0]
-
 
 ###################
 ###Model Fitting###
 ###################
 print ('Beginning fitting procedure...')
 
+#Decide which function we are going to use
+if args.cbf is None:
+	wbFunc = nagini.gluThree(interpTime,aifInterp)
+else:
+	wbCbf = np.mean(cbfMasked)
+	wbFunc = nagini.gluThree(interpTime,aifTime,cbf=wbCbf)
+
 #Attempt to fit model to whole-brain curve
-fitX = np.vstack((interpTime,aifInterp))
 try:
 	if args.cbf is None:
-		wbFit = opt.curve_fit(nagini.gluThreeIdaif,fitX,wbInterp,p0=[0.001,0.001,0.001],bounds=([0,0,0],[1,1,1]))
+		wbFit = opt.curve_fit(wbFunc,petTime,wbTac,p0=[0.001,0.001,0.001],bounds=([0,0,0],[1,1,1]))
 	else:
-		wbFit = opt.curve_fit(nagini.gluGefIdaif(np.mean(cbfMasked)),fitX,wbInterp,p0=[0.2,0.001,0.001],bounds=([0,0,0],[1,1,1]))
+		wbFit = opt.curve_fit(wbFunc,petTime,wbTac,p0=[0.2,0.001,0.001],bounds=([0,0,0],[1,1,1]))
 except(RuntimeError):
 	print 'ERROR: Cannot estimate three-parameter model on whole-brain curve. Exiting...'
 	sys.exit()
-sys.exit()
+
+#Get proper whole-brain estimates
+if args.cbf is None:
+
+	#Get whole brain fitted values
+	wbGlu = ((wbFit[0][0]*wbFit[0][2])/(wbFit[0][1]+wbFit[0][2]))*gluScale
+	wbFitted = wbFunc(petTime,wbFit[0][0],wbFit[0][1],wbFit[0][2])
+
+	#Create string for whole-brain parameter estimates
+	wbString = 'kOne=%f\nkTwo=%f\nkThree=%f\nCMRglu=%f'%(wbFit[0][0],wbFit[0][1],wbFit[0][2],wbGlu)
+
+else:
+	#Get whole brain fitted values
+	wbGlu = ((wbFit[0][0]*wbFit[0][2]*wbCbf)/(wbFit[0][1]+wbFit[0][2]))*gluScale
+	wbFitted = wbFunc(petTime,wbFit[0][0],wbFit[0][1],wbFit[0][2],cbf=wbCbf)
+
+	#Create string for whole-brain parameter estimates
+	wbString = 'GEF=%f\nkOne=%f\nkTwo=%f\nkThree=%f\nCMRglu=%f'%(wbFit[0][0],wbFit[0][0]*wbCbf,wbFit[0][1],wbFit[0][2],wbGlu)
+	
+
+#Write out whole-brain results
+try:
+	#Parameter estimates
+	wbOut = open('%s_wbVals.txt'%(args.out[0]), "w")
+	wbOut.write(wbString)
+	wbOut.close()
+
+	#Whole-brain tac
+	np.savetxt('%s_wbTac.txt'%(args.out[0]),wbTac)
+
+	#Whole-brain fitted values
+	np.savetxt('%s_wbFitted.txt'%(args.out[0]),wbFitted)
+except(IOError):
+	print 'ERROR: Cannot write in output directory. Exiting...'
+	sys.exit()
+
+#Don't do voxelwise estimation if user says not to
+if args.wbOnly == 1:
+	sys.exit()
+
 #Use whole-brain values as initilization
 init = wbFit[0]
 
@@ -220,14 +266,13 @@ for voxIdx in tqdm(range(nVox)):
 	
 	#Get voxel tac and then interpolate it
 	voxTac = petMasked[voxIdx,:]
-	voxInterp = interp.interp1d(petTime,voxTac,kind="linear")(interpTime)
 
 	try:
 		#Run the appropriate kinetic model
 		if args.cbf is None:
 			
 			#Fit model with k1 estimate
-			voxFit = opt.curve_fit(nagini.gluThreeIdaif,fitX,voxInterp,p0=init,bounds=bounds)
+			voxFit = opt.curve_fit(wbFunc,petTime,voxTac,p0=init,bounds=bounds)
 
 			#Save parameter estimates.
 			fitParams[voxIdx,0:3] = voxFit[0]
@@ -241,15 +286,15 @@ for voxIdx in tqdm(range(nVox)):
 			fitParams[voxIdx,7] = np.dot(np.dot(gluGrad.T,voxFit[1]),gluGrad)
 
 			#Get normalized root mean square deviation
-	 		fitResid = voxInterp - nagini.gluThreeIdaif(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
-			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
-			fitParams[voxIdx,8] = fitRmsd / np.mean(voxInterp)
+	 		fitResid = voxTac - wbFunc(petTime,voxFit[0][0],voxFit[0][1],voxFit[0][2])
+			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0])
+			fitParams[voxIdx,8] = fitRmsd / np.mean(voxTac)
 
 			
 		else:
 			#Fit model with gef estimate
-			voxFunc = nagini.gluGefIdaif(cbfMasked[voxIdx])
-			voxFit = opt.curve_fit(voxFunc,fitX,voxInterp,p0=init,bounds=bounds)
+			voxFunc = nagini.gluThree(interpTime,aifInterp,cbf=cbfMasked[voxIdx])
+			voxFit = opt.curve_fit(voxFunc,petTime,voxTac,p0=init,bounds=bounds)
 
 			#Save parameter estimates
 			fitParams[voxIdx,0:3] = voxFit[0]
@@ -265,9 +310,9 @@ for voxIdx in tqdm(range(nVox)):
 			fitParams[voxIdx,9] = np.dot(np.dot(gluGrad.T,voxFit[1]),gluGrad)
 
 			#Get normalized root mean square deviation
-	 		fitResid = voxInterp - voxFunc(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
-			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
-			fitParams[voxIdx,10] = fitRmsd / np.mean(voxInterp)	
+	 		fitResid = voxTac - voxFunc(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
+			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0])
+			fitParams[voxIdx,10] = fitRmsd / np.mean(voxTac)	
 
 	except(RuntimeError):
 		noC += 1
@@ -283,5 +328,5 @@ print('Writing out results...')
 
 #Write out two parameter model images
 for iIdx in range(len(imgNames)):
-	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],imgNames[iIdx]))
+	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],imgNames[iIdx]))
 
