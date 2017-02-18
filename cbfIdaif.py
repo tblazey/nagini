@@ -51,6 +51,7 @@ argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for flow parameter. Default is 10 times whole brain value')
 argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for lambda parameter. Default is 0 to 2.')
+argParse.add_argument('-range',help='Time range for kinetic estimation in seconds. Default is full scan. Can specify "start" or end" or use number is seconds',nargs=2,metavar='time')
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 args = argParse.parse_args()
 
@@ -80,6 +81,28 @@ idaif = nagini.loadIdaif(args.idaif[0])
 #Load in the info file
 info = nagini.loadInfo(args.info[0])
 
+#Use middle times as pet time. Account for any offset
+petTime = info[:,1] - info[0,0]
+
+#Range logic
+if args.range is not None:
+
+	#So user doesn't have to know start or end
+	if args.range[0] == "start":
+		args.range[0] = petTime[0]
+	if args.range[1] == "end":
+		args.range[1] = petTime[-1]
+	args.range = np.array(args.range,dtype=np.float64)
+
+	#Check to see if the users range is actually within data
+	if (args.range[0] < petTime[0]) or (args.range[1] > petTime[-1]):
+		print 'Error: User selected range from %s to %s is outside of PET range of %f to %f.'%(args.range[0],args.range[1],petTime[0],petTime[-1])
+		sys.exit()
+	else:
+		petRange = np.array([args.range[0],args.range[1]])
+else:
+	petRange = np.array([petTime[0],petTime[-1]])
+
 #Check to make sure dimensions match
 if pet.shape[0:3] != brain.shape[0:3] or pet.shape[3] != idaif.shape[0] or pet.shape[3] != info.shape[0]:
 	print 'ERROR: Data dimensions do not match. Please check...'
@@ -92,8 +115,11 @@ brainData = brain.get_data()
 #Flatten the PET images and then mask
 petMasked = nagini.reshape4d(petData)[brainData.flatten()>0,:]
 
-#Use middle times as pet time. Account for any offset
-petTime = info[:,1] - info[0,0]
+#Limit pet range
+timeMask = np.logical_and(petTime>=petRange[0],petTime<=petRange[1])
+petTime = petTime[timeMask]
+idaif = idaif[timeMask]
+petMasked = petMasked[:,timeMask]
 
 #Get interpolation times as start to end of pet scan with aif sampling rate
 minTime = np.min(np.diff(petTime))
@@ -102,7 +128,7 @@ interpTime = np.arange(petTime[0],np.ceil(petTime[-1]+minTime),minTime)
 #Interpolate the AIF
 aifInterp = interp.interp1d(petTime,idaif,kind="linear",fill_value="extrapolate")(interpTime)
 
-#Get the whole brain tac and interpolate that
+#Get the whole brain tac
 wbTac = np.mean(petMasked,axis=0)
 
 ###################

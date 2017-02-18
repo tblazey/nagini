@@ -107,7 +107,7 @@ petTime = info[:,1] - info[0,0]
 #Check to see if the users range is actually within data
 if args.range is not None:
 	if args.range[0] < petTime[0] or args.range[1] > petTime[-1]:
-		print 'Error: Users selected range from %f to %f is outside of PET range of %f to %f.'%(args.range[0],args.range[1],petTime[0],petTime[-1])
+		print 'Error: User selected range from %f to %f is outside of PET range of %f to %f.'%(args.range[0],args.range[1],petTime[0],petTime[-1])
 		sys.exit()
 	else:
 		petRange = np.array([args.range[0],args.range[1]])

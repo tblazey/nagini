@@ -36,7 +36,13 @@ saveGz: Saves a gzipped .npy file
 
 #What libraries do we need
 import numpy as np, nibabel as nib, sys, scipy.ndimage as img
-import scipy.interpolate as interp, subprocess as sub, pystan
+import scipy.interpolate as interp, subprocess as sub
+
+#Only import pystan if we can
+try: 
+	import pystan
+except(ImportError):
+	pass
 
 ###############
 ###Functions###
