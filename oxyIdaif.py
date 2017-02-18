@@ -10,27 +10,8 @@ oxyIdaifOhta.py: Calculates metabolic rate of oxygen using a 015 oxygen scan and
 
 Uses model described by Mintun et al, Journal of Nuclear Medicine 1984
 
-Requires the following inputs:
-	pet -> PET oxygen image.
-	cbf -> CBF image in mL/hg/min
-	lmbda -> Water blood-brain paritition coefficient in mL/g
-	cbv -> CBV image in mL/hg
-	artOxy -> Arterial concentration of oxygen in uM/mL
-	info -> Yi Su style PET info file. 
-	idaif -> Image derivied arterial input function
-	brain -> Brain mask in the same space as pet.
-	out -> Root for all outputed file
-	
-User can set the following options:
-	d -> Density of brain tissue in g/mL. Default is 1.05.
-	delay -> Delay parameter for the estimation of the water component of the IDAIF. Default is 20 seconds.
-	decay -> Decay parameter for the estimation of the water component of the IDAIF. Default is 0.0012 seconds.
-	r -> Ratio of small-vessel to large-vessel hematrocrit. Default is 0.85'
-	range -> Start and end time of PET data for estimation of OEF. Default is scan start to 45 seconds.
-	kinetic -> Use full kinetic modeling to calculate OEF. Default is to use the autoradiographic method.
-	eBound -> Bounds for OEF parameter when -kinetic is used. Default is 0 to 1.
-
 Produces the following outputs:
+	wbVals.txt -> Estimates of whole-brain OEF and CMRO2
 	cmrOxy -> Voxelwise map of cerebral metabolic rate of oxygen in mL/hg/min
 	oef -> Voxelwise map of oxygen extraction fraction
 
@@ -67,9 +48,10 @@ argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.0
 argParse.add_argument('-delay',help='Delay parameter in seconds for estimating water component of IDAIF. Default is 20',default=20,metavar='delay',type=float)
 argParse.add_argument('-decay',help='Decay constant in seconds for estimating water component of IDAIF. Default is 0.0012',default=0.0722/60.0,metavar='decay',type=float)
 argParse.add_argument('-r',help='Value for the mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',nargs=1,default=0.85,type=float,metavar='ratio')
-argParse.add_argument('-range',help='Time range for OEF estimation in seconds. Default is scan start to 45 seconds.',nargs=2,type=float,metavar='time')
+argParse.add_argument('-range',help='Time range for OEF estimation in seconds. Default is scan start to 45 seconds. Accepts start/end or numbers',nargs=2,metavar='time')
 argParse.add_argument('-kinetic',help='Use full kinetic modeling instead of autoradiographic method',action='store_const',const=1)
 argParse.add_argument('-eBound',help='Bounds for OEF when using kinetic modeling',nargs=2,type=float,metavar=('lower','upper'))
+argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -104,10 +86,19 @@ info = nagini.loadInfo(args.info[0])
 #Use middle times as pet time. Account for any offset
 petTime = info[:,1] - info[0,0]
 
-#Check to see if the users range is actually within data
+#Range logic
 if args.range is not None:
-	if args.range[0] < petTime[0] or args.range[1] > petTime[-1]:
-		print 'Error: User selected range from %f to %f is outside of PET range of %f to %f.'%(args.range[0],args.range[1],petTime[0],petTime[-1])
+
+	#So user doesn't have to know start or end
+	if args.range[0] == "start":
+		args.range[0] = petTime[0]
+	if args.range[1] == "end":
+		args.range[1] = petTime[-1]
+	args.range = np.array(args.range,dtype=np.float64)
+
+	#Check to see if the users range is actually within data
+	if (args.range[0] < petTime[0]) or (args.range[1] > petTime[-1]):
+		print 'Error: User selected range from %s to %s is outside of PET range of %f to %f.'%(args.range[0],args.range[1],petTime[0],petTime[-1])
 		sys.exit()
 	else:
 		petRange = np.array([args.range[0],args.range[1]])
@@ -130,14 +121,20 @@ brainData = brain.get_data()
 
 #Flatten the PET images and then mask. Also convert parameteric images back to orginal PET units. 
 brainMask = brainData.flatten()
-petData = nagini.reshape4d(petData)[brainMask>0,:]
-cbfData = cbfData.flatten()[brainMask>0] / 6000.0 * args.d
-lmbdaData = lmbdaData.flatten()[brainMask>0] * args.d
-cbvData = cbvData.flatten()[brainMask>0] / 100 * args.d
+petMasked = nagini.reshape4d(petData)[brainMask>0,:]
+cbfMasked = cbfData.flatten()[brainMask>0] / 6000.0 * args.d
+lmbdaMasked = lmbdaData.flatten()[brainMask>0] * args.d
+cbvMasked = cbvData.flatten()[brainMask>0] / 100 * args.d
+
+#Limit pet range
+timeMask = np.logical_and(petTime>=petRange[0],petTime<=petRange[1])
+petTime = petTime[timeMask]
+idaif = idaif[timeMask]
+petMasked = petMasked[:,timeMask]
 
 #Interpolate the aif to minimum sampling time
 minTime = np.min(np.diff(petTime))
-interpTime = np.arange(petRange[0],petRange[1],minTime)
+interpTime = np.arange(petTime[0],np.ceil(petTime[-1]+minTime),minTime)
 nTime = interpTime.shape[0]
 aifLinear = interp.interp1d(petTime,idaif,kind="linear",fill_value="extrapolate")
 aifInterp = aifLinear(interpTime)
@@ -147,32 +144,45 @@ aifDelay = aifLinear(interpTime-args.delay); aifDelay[aifDelay<0] = 0
 aifWater = args.decay*np.convolve(aifDelay,np.exp(-args.decay*interpTime))[0:nTime]*minTime
 aifOxy = aifInterp - aifWater
 
+#Scale for converting to CMRO02
+oxyScale = args.artOxy[0] * 6000.0 / args.d
+
+#Get the average whole-brain flow, cbv, and lambda. Not strictly speaking correct as I should get the tacs.
+wbFlow = np.mean(cbfMasked[cbfMasked!=0])
+wbLmbda = np.mean(lmbdaMasked[lmbdaMasked!=0])
+wbCbv = np.mean(cbvMasked[cbvMasked!=0])
+
+#Get the whole brain tac
+wbTac = np.mean(petMasked,axis=0)
+
 #If user wants to do kinetic modeling
 if args.kinetic == 1:
-	
-	#Get the whole brain tac and interpolate that
-	wbTac = np.mean(petData,axis=0)
-	wbInterp = interp.interp1d(petTime,wbTac,kind="linear")(interpTime)
-
-	#Get the average whole-brain flow, cbv, and lambda. Not strictly speaking correct as I should get the tacs.
-	wbFlow = np.mean(cbfData[cbfData!=0])
-	wbLmbda = np.mean(lmbdaData[lmbdaData!=0])
-	wbCbv = np.mean(cbvData[cbvData!=0])
 
 	#Attempt to fit model to whole-brain curve
-	fitX = np.vstack((interpTime,aifOxy,aifWater))
+	wbFunc = nagini.oxyOne(interpTime,aifWater,aifOxy,wbFlow,wbLmbda,wbCbv,args.r)
 	try:
-		wbFit = opt.curve_fit(nagini.oxyOneIdaif(wbFlow,wbLmbda,wbCbv,args.r),fitX,wbInterp,bounds=(0,1))
+		wbFit = opt.curve_fit(wbFunc,petTime,wbTac,bounds=(0,1))
 	except(RuntimeError):
 		print 'ERROR: Cannot estimate one-parameter model on whole brian curve. Exiting...'
 		sys.exit()
 
+	#Get whole brain fitted values
+	wbFitted = wbFunc(petTime,wbFit[0][0])
+
+	#Create string for whole-brain parameter estimates
+	wbString = 'OEF=%f\nCMROxy=%f'%(wbFit[0][0],wbFit[0][0]*wbFlow*oxyScale)
+
+	#Whole-brain tac
+	np.savetxt('%s_wbTac.txt'%(args.out[0]),wbTac)
+
+	#Whole-brain fitted values
+	np.savetxt('%s_wbFitted.txt'%(args.out[0]),wbFitted)
+
 	#Use whole-brain values as initilization
 	init = wbFit[0]
-	print init
-	sys.exit()
+
 	#Set bounds 
-	bounds = np.array([0,1],dtype=np.float)
+	bounds = np.array([0,1.5],dtype=np.float)
 	if args.eBound is not None:
 		bounds[0] = args.eBound[0]
 		bounds[1] = args.eBound[1]
@@ -184,49 +194,71 @@ if args.kinetic == 1:
 	imgNames = ['oef','cmrOxy','oef_var','cmrOxy_var','nRmsd']
 
 else:
+	#Calculate whole-brain OEF
+	wbOef = nagini.oefCalc(wbTac,petTime,interpTime,aifOxy,aifWater,wbFlow,wbCbv,wbLmbda,args.r)
+	
+	#Create string for whole-brain parameter estimates
+	wbString = 'OEF=%f\nCMROxy=%f'%(wbOef,wbOef*wbFlow*oxyScale)
+	
 	#Output names for autoradiographic method
 	imgNames = ['oef','cmrOxy']
 
+#Write out whole-brain results
+try:
+	#Parameter estimates
+	wbOut = open('%s_wbVals.txt'%(args.out[0]), "w")
+	wbOut.write(wbString)
+	wbOut.close()
+except(IOError):
+	print 'ERROR: Cannot write in output directory. Exiting...'
+	sys.exit()
+
+#Don't do voxelwise estimation if user says not to
+if args.wbOnly == 1:
+	sys.exit()
 
 ###################
 ###Model Fitting###
 ###################
 print ('Calculating OEF and cmrOxy at each voxel...')
 
+#Create a mask of non-zero inputs
+useMask = np.logical_and(np.logical_and(cbfMasked!=0,lmbdaMasked!=0),cbvMasked!=0)
+
 #Loop through every voxel
-nVox = petData.shape[0]; oefParams = np.zeros((nVox,len(imgNames))); noC = 0
+nVox = petMasked.shape[0]; oefParams = np.zeros((nVox,len(imgNames))); noC = 0
 for voxIdx in tqdm(range(nVox)):
 
 	#Only process data if input images are non-zero
-	if cbfData[voxIdx] !=0  and lmbdaData[voxIdx] != 0 and cbvData[voxIdx] != 0:
+	if useMask[voxIdx] == True:
 
 		#Get voxel tac and then interpolate it
-		voxTac = petData[voxIdx,:]
-		voxInterp = interp.interp1d(petTime,voxTac,kind="linear")(interpTime)
+		voxTac = petMasked[voxIdx,:]
 	
 		#Perform kinetic modeling if user wants
 		if args.kinetic == 1:
 
 			try:
-		
 				#Get voxel fit with two parameter model
-				voxFunc = nagini.oxyOneIdaif(cbfData[voxIdx],lmbdaData[voxIdx],cbvData[voxIdx],args.r)
-				voxFit = opt.curve_fit(voxFunc,fitX,voxInterp,bounds=(0,1),p0=init)
-				
-		
+				nagini.oxyOne(interpTime,aifWater,aifOxy,wbFlow,wbLmbda,wbCbv,args.r)
+				voxFunc = nagini.oxyOne(interpTime,aifWater,aifOxy,\
+						cbfMasked[voxIdx],lmbdaMasked[voxIdx],\
+						cbvMasked[voxIdx],args.r)
+				voxFit = opt.curve_fit(voxFunc,petTime,voxTac,bounds=bounds,p0=init)
+
 				#Save parameter estimates
-				oxyScale = cbfData[voxIdx] * args.artOxy[0] * 6000.0 / args.d
+				voxScale = cbfMasked[voxIdx] * oxyScale
 				oefParams[voxIdx,0] = voxFit[0][0]
-				oefParams[voxIdx,1] = voxFit[0][0] * oxyScale
+				oefParams[voxIdx,1] = voxFit[0][0] * voxScale
 		
 				#Save parameter variance estimates
 				oefParams[voxIdx,2] = voxFit[1][0]
-				oefParams[voxIdx,3] = voxFit[1][0] * np.power(oxyScale,2)
+				oefParams[voxIdx,3] = voxFit[1][0] * np.power(voxScale,2)
 
 				#Get normalized root mean square deviation
-	 			fitResid = voxInterp - voxFunc(fitX,voxFit[0][0])
-				fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
-				oefParams[voxIdx,4] = fitRmsd / np.mean(voxInterp)
+	 			fitResid = voxTac - voxFunc(petTime,voxFit[0][0])
+				fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0])
+				oefParams[voxIdx,4] = fitRmsd / np.mean(voxTac)
 
 			except(RuntimeError):
 				noC += 1
@@ -235,10 +267,11 @@ for voxIdx in tqdm(range(nVox)):
 		else:
 		
 			#Calculate OEF
-			oefParams[voxIdx,0] = nagini.oefCalcIdaif(voxInterp,interpTime,aifOxy,aifWater,cbfData[voxIdx],cbvData[voxIdx],lmbdaData[voxIdx],args.r)
+			oefParams[voxIdx,0] = nagini.oefCalc(voxTac,petTime,interpTime,aifOxy,aifWater,\
+				cbfMasked[voxIdx],cbvMasked[voxIdx],lmbdaMasked[voxIdx],args.r)
 
 			#Calculate the cerebral metabolic rate of oxygen
-			oefParams[voxIdx,1] = oefParams[voxIdx,0] * cbfData[voxIdx] * args.artOxy[0] * 6000.0 / args.d 
+			oefParams[voxIdx,1] = oefParams[voxIdx,0] * cbfMasked[voxIdx] * oxyScale 
 
 #Warn user about lack of convergence
 if noC > 0:
@@ -248,9 +281,8 @@ if noC > 0:
 ###Output!###
 #############
 print('Writing out results...')
-
 #Write out two parameter model images
 for iIdx in range(len(imgNames)):
-	nagini.writeMaskedImage(oefParams[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],imgNames[iIdx]))
+	nagini.writeMaskedImage(oefParams[:,iIdx],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],imgNames[iIdx]))
 
 

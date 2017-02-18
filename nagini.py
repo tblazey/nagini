@@ -773,7 +773,7 @@ def gluFourIdaif(X,kOne,kTwo,kThree,kFour):
 	cI = np.convolve(cLeft*(cMiddle+cRight),X[1,:])[0:X.shape[1]]*minTime
 	return cI
 
-def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
+def oefCalc(pet,petTime,aifTime,oxyAif,waterAif,cbf,cbv,lmbda,R):
 	
 	"""
 	
@@ -785,10 +785,12 @@ def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
 	   A array of length n containing the pet timecourse values
 	petTime: array
 	   An array of length n containing the sampling times for PET. Must be evently spaced.
-	oxyIdaif: array
-	   An array of length n containing the input function for oxygen.
-	waterIdaif: array
-	   An array of length n containing the input fuction for water.
+	aifTime : array
+	   An array of length m containing aif times
+	oxyAif: array
+	   An array of length m containing the input function for oxygen.
+	waterAif: array
+	   An array of length m containing the input fuction for water.
 	cbf: float
 	   CBF value in 1/seconds
 	cbv: float
@@ -809,17 +811,17 @@ def oefCalcIdaif(pet,petTime,oxyIdaif,waterIdaif,cbf,cbv,lmbda,R):
 	petInteg = np.trapz(pet,petTime)
 
 	#Integrate the oxygen IDIAF
-	oxyInteg = np.trapz(oxyIdaif,petTime)
+	oxyInteg = np.trapz(oxyAif,aifTime)
 
 	#Convolve oxygen and water with negative exponentials. Then integrate
-	sampTime = petTime[1] - petTime[0]
-	oxyExpInteg = np.trapz(np.convolve(oxyIdaif,np.exp(-cbf/lmbda*petTime))[0:petTime.shape[0]]*sampTime,petTime)
-	waterExpInteg = np.trapz(np.convolve(waterIdaif,np.exp(-cbf/lmbda*petTime))[0:petTime.shape[0]]*sampTime,petTime)
+	sampTime = aifTime[1] - aifTime[0]
+	oxyExpInteg = np.trapz(np.convolve(oxyAif,np.exp(-cbf/lmbda*aifTime))[0:aifTime.shape[0]]*sampTime,aifTime)
+	waterExpInteg = np.trapz(np.convolve(waterAif,np.exp(-cbf/lmbda*aifTime))[0:aifTime.shape[0]]*sampTime,aifTime)
 
-	#Calculate EOF using the standard Mintun method
+	#Calculate OEF using the standard Mintun method
 	return ( petInteg - (cbf*waterExpInteg) - (cbv*R*oxyInteg) ) / ( (cbf*oxyExpInteg) - (cbv*R*0.835*oxyInteg) )
 
-def oxyOneIdaif(flow,lmbda,cbv,R):
+def oxyOne(aifTime,aifWater,aifOxy,flow,lmbda,cbv,R):
 	
 	"""
 	
@@ -828,6 +830,12 @@ def oxyOneIdaif(flow,lmbda,cbv,R):
 	Parameters
 	----------
 
+	aifTime: vector
+	   A n length vector of aif sample times
+	aifWater: vector
+	   A n length vector of aif samples for water
+	aifOxy: vector
+	   A n length vector of aif samples for oxygen
 	flow: float
 	   Estimate of cerebral blood flow
 	lmbda: float
@@ -836,7 +844,6 @@ def oxyOneIdaif(flow,lmbda,cbv,R):
 	   Estimate of CBV
 	R: float
 	   Ratio of small-vessel to large vessel hematocrit
-	
 
 	Returns
 	-------
@@ -844,9 +851,13 @@ def oxyOneIdaif(flow,lmbda,cbv,R):
 		A function that will return the Mintun model predictions given inputs X and E 
 	
 	"""
+
+	#Get sampling time and number of time points
+	sampTime = aifTime[1] - aifTime[0]
+	nAif = aifTime.shape[0]
 	
 	#Actual model prediction function
-	def oxyPred(X,E):
+	def oxyPred(petTime,E):
 
 		"""
 	
@@ -855,31 +866,35 @@ def oxyOneIdaif(flow,lmbda,cbv,R):
 		Parameters
 		----------
 
-		X: array
-	   	   A 3,n array containing pet times, oxygen input function, and water input function
+		petTime: array
+	   	   A m length array containing pet sample times
 		E: float
 		   Oxygen extraction fraction
 	
 
 		Returns
 		-------
-		cT: array of length n
+		petPred: array of length n
 	  	   Model predictions for Mintun oxygen model give input parameters
 	
 		"""
 
-		#Get sampling time and number of time points
-		sampTime = X[0,1] - X[0,0]
-		nTime = X.shape[1]
-
 		#Calculate components of model
-		cOne = cbv*R*(1-(E*0.835))*X[1,:]
-		cTwo = flow*np.convolve(X[2,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
-		cThree = flow*E*np.convolve(X[1,:],np.exp(-flow/lmbda*X[0,:]))[0:nTime]*sampTime
+		cOne = cbv*R*(1-(E*0.835))*aifOxy
+		cTwo = flow*np.convolve(aifWater,np.exp(-flow/lmbda*aifTime))[0:nAif]*sampTime
+		cThree = flow*E*np.convolve(aifOxy,np.exp(-flow/lmbda*aifTime))[0:nAif]*sampTime
+		cSum = cOne + cTwo + cThree
 
-		#Return model predictions
-		return cOne + cTwo + cThree
+		#Interpolate predicted response at pet times if necessary.
+		if np.all(aifTime==petTime):
+			petPred = cSum
+		else:
+			petPred = interp.interp1d(aifTime,cSum,kind="linear")(petTime)
 
+		#Return predictions
+		return petPred
+
+	#Return prediction function
 	return oxyPred
 
 def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
