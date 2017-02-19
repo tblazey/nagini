@@ -107,10 +107,11 @@ cbvData = cbv.get_data()
 brainData = brain.get_data()
 
 #Flatten the PET images and then mask. Also convert parameteric images back to original PET units. 
-brainMask = np.logical_and(np.logical_and(cbfData!=0,cbvData!=0),brainData!=0).flatten()
-petMasked = nagini.reshape4d(petData)[brainMask>0,:]
-cbfMasked = cbfData.flatten()[brainMask>0] #Don't convert CBF as quadratic equations are in real units
-cbvMasked = cbvData.flatten()[brainMask>0] / 100 * args.d * args.r
+brainData = np.logical_and(np.logical_and(cbfData!=0,cbvData!=0),brainData!=0)
+brainMask = brainData.flatten()
+petMasked = nagini.reshape4d(petData)[brainMask,:]
+cbfMasked = cbfData.flatten()[brainMask] #Don't convert CBF as quadratic equations are in real units
+cbvMasked = cbvData.flatten()[brainMask] / 100 * args.d * args.r
 
 #Interpolate the aif to minimum sampling time. Make sure we get the last time even if we have to go over range.
 minTime = np.min(np.diff(petTime[petTime<petRange[1]]))
@@ -219,7 +220,7 @@ petInt = np.trapz(petMasked,petTime,axis=1)
 petMat = np.stack((cbfMasked,np.power(cbfMasked,2)),axis=1)
 
 #Calculate whole-brain OEF and CMRO2
-petOef = ( wbInt - petMat.dot(waterCoef) - (aifOxyInt*cbvMasked) ) / \
+petOef = ( petInt - petMat.dot(waterCoef) - (aifOxyInt*cbvMasked) ) / \
 	( petMat.dot(oxyCoef) - (0.835*aifOxyInt*cbvMasked) )
 petOxy = petOef * args.artOxy[0] * cbfMasked
 
