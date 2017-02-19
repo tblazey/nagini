@@ -31,6 +31,7 @@ argParse = argparse.ArgumentParser(description='Extract variable from matlab .ma
 argParse.add_argument('mat',help='Matlab .mat file',nargs=1,type=str)
 argParse.add_argument('var',help='Name of variable to extract',nargs=1,type=str)
 argParse.add_argument('out',help='Name of text output file',nargs=1,type=str)
+argParse.add_argument('-p',help='Prints a file instead of writing',action='store_const',const=1)
 args = argParse.parse_args()
 
 #####################
@@ -52,12 +53,16 @@ if args.var[0] not in matData:
 	print 'ERROR: Variable: %s is not actually in %s'%(args.var[0],args.mat[0])
 	sys.exit()
 
-#Write it out
-try:
-	np.savetxt(args.out[0],matData[args.var[0]])
-except (IOError):
-	print 'ERROR: Cannot save output file at %s'%(args.out[0])
-	sys.exit()
+#Print or write out file
+if args.p == 1:
+	print matData[args.var[0]]
+else:
+	#Write it out
+	try:
+		np.savetxt(args.out[0],matData[args.var[0]])
+	except (IOError):
+		print 'ERROR: Cannot save output file at %s'%(args.out[0])
+		sys.exit()
 
 
 

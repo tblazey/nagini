@@ -186,6 +186,6 @@ print('Writing out results...')
 #Write out two parameter model images
 imgNames = ['kOne','kTwo','vZero','cmrOxy','kOne_var','kTwo_var','vZero_var','cmrOxy_var','nRmsd']
 for iIdx in range(len(imgNames)):
-	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],imgNames[iIdx]))
+	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],imgNames[iIdx]))
 
 
