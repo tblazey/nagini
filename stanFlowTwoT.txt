@@ -1,0 +1,120 @@
+functions {
+
+	// Elementwise exponent
+	vector eVec(vector x,int n){
+		vector[n] pX;
+		for (i in 1:n)
+			pX[i] = exp(x[i]);
+		return(pX);
+	}
+
+	
+	// Linear interpolation
+	vector linInterp(vector x,vector y, vector xPrime, int nX, int nPrime){
+		vector[nPrime] yPrime;
+		for (i in 1:nPrime){
+			int k; int j;
+			k = 0; j = 1;
+			while (k==0){
+				//Check to see if current point in loop is boundry point
+				if( xPrime[i]-x[j]<=0 || j==nX ){
+					real yZero; real yOne;
+					real xZero; real xOne;
+					real mu;
+
+					//Account for extrapolation if needed
+					if ( j == 1 ){
+						yZero = y[j]; yOne = y[j+1];
+						xZero = x[j]; xOne = x[j+1];
+					}
+					else{
+						yZero = y[j-1]; yOne = y[j];
+						xZero = x[j-1]; xOne = x[j];
+					}
+
+					//Interpolate point
+					mu = (xPrime[i]-xZero)/(xOne-xZero);
+					yPrime[i] = yZero*(1-mu) + yOne*mu;
+
+					//Break
+					k = 1;
+				}
+				j = j + 1;
+			}
+		}
+		return(yPrime);
+	}
+
+	// Function to perform a nice little convolution
+	vector convolve(vector x, vector y, int n, real step){
+
+		// Declare variables
+		vector[n] c;
+		real cSum;
+
+		#Do some convolving
+		for (i in 1:n) {
+			cSum = 0;
+			for (j in 1:i) {
+				cSum = cSum + (x[j]*y[i-j+1]);
+			}
+			c[i] = cSum * step;
+		}
+		return(c);
+	}
+
+}
+
+data {
+	int nPet;
+	int nAif;
+	vector[nAif] aifTime;
+	vector[nAif] aifC;
+	vector[nPet] pet;
+	vector[nPet] petTime;
+	real aifStep;
+	real dens;
+	real meanPet;
+}
+
+parameters {
+	real<lower=0> flow;
+	real<lower=0> lambda;
+	real<lower=0> sigma;
+	real<lower=0> nu;
+}
+
+model {
+	vector[nAif] mu;
+	vector[nPet] petMu;
+
+	//Priors
+	flow ~ cauchy(45,8);
+	lambda ~ cauchy(0.9,0.25);
+	nu ~ gamma(1.5,0.1);
+	sigma ~ cauchy(300,100);
+
+	//Get model predictions
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
+	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	
+	//Define likilihood
+	pet ~ student_t(nu,petMu,sigma);
+}
+
+generated quantities {
+	vector[nAif] mu;
+	vector[nPet] petMu;
+	vector[nPet] petPost;
+	real rmsd;
+
+	//Get model predictions
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
+	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	for (i in 1:nPet)
+		petPost[i] = student_t_rng(nu,petMu[i],sigma);
+	
+	//Calculate normalied RMSE
+	rmsd = sqrt(squared_distance(pet,petMu)/nPet) / meanPet;
+}
+

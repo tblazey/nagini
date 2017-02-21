@@ -19,14 +19,15 @@ Produces the following outputs:
 	lambdaVar -> Voxelwise map of the variance fo the lambda estimate.
 	nRmsd -> Normalized (to-mean) root-mean-square deviation of fit
 
-If fModel is set it also produces:
+If -fModel is set and -noDelay is not it will produce:
 	delay -> Voxelwise map of the shift of the input function (in seconds)
    	delayVar -> Voxelwise map of shift variance
+If -fModel is set and -noDisp is not, you also get:
    	disp -> Voxelwise map of dispersion
    	dispVar -> Voxelwise map of dispersion variance
 
 Requires the following modules:
-	argparse, numpy, nibabel, nagini, tqdm, scipy, matplotlib
+	argparse, numpy, nibabel, nagini, tqdm, scipy, matplotlib, scikit-learn
 
 Tyler Blazey, Winter 2017
 blazey@wustl.edu
@@ -46,16 +47,18 @@ argParse.add_argument('well',help='Well-counter calibration factor',nargs=1,type
 argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
 argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
-argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
-argParse.add_argument('-fModel',action='store_const',const=1,help='Does delay and dispersion estimate at each voxel.')
-argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for flow parameter. Default is 10 times whole brain value')
-argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for lambda parameter. Default is 0 to 1.')
-argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for delay parameter. Default is 10 times whole brain value. Note: -fModel must be set')
-argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for dispersion parameter. Default is 10 times whole brain value. Note: -fModel must be set')
-argParse.add_argument('-nKnots',nargs=1,type=int,help='Number of knots for AIF spline. Default is 15',default=[15])
+argParse.add_argument('-nKnots',nargs=1,type=int,help='Number of knots for AIF spline. Default is number of data points',metavar='n')
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
+argParse.add_argument('-dcv',action='store_const',const=1,help='AIF is from a DCV file, not a CRV file. Using -noDisp or -noDelay is recommended.')
+argParse.add_argument('-noDisp',action='store_const',const=1,help='Do not include AIF dispersion term in model.')
+argParse.add_argument('-noDelay',action='store_const',const=1,help='Do not include AIF delay term in model. Implies -noDisp.')
+argParse.add_argument('-fModel',action='store_const',const=1,help='Does delay and/or dispersion estimate at each voxel.')
+argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
+argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise flow parameter. Default is 10 times whole-brain estimate')
+argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise lambda parameter. Default is 0 to 2.')
+argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise delay parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDelay is not.')
+argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise dispersion parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDisp is not.')
 args = argParse.parse_args()
-
 
 #Make sure sure user set bounds correctly
 for bound in [args.fBound,args.lBound,args.dBound,args.tBound]:
@@ -68,6 +71,7 @@ for bound in [args.fBound,args.lBound,args.dBound,args.tBound]:
 import numpy as np, nibabel as nib, nagini, sys, scipy.optimize as opt
 import scipy.interpolate as interp, matplotlib.pyplot as plt, matplotlib.gridspec as grid
 from tqdm import tqdm
+from sklearn import linear_model
 
 #########################
 ###Data Pre-Processing###
@@ -75,7 +79,10 @@ from tqdm import tqdm
 print ('Loading images...')
 
 #Load in the input function
-aif = nagini.loadAif(args.aif[0])
+if args.dcv != 1:
+	aif = nagini.loadAif(args.aif[0])
+else:
+	aif = nagini.loadAif(args.aif[0],dcv=True)
 
 #Load in the info file
 info = nagini.loadInfo(args.info[0])
@@ -102,54 +109,102 @@ petTime = info[:,1] - info[0,0]
 #Get aif time variable
 aifTime = aif[:,0]
 
-#Reset first two points in AIF which are not traditionally used
-aifC= aif[:,1]; aifC[0:2] = aifC[2]
+#Decay correct the AIF to pet offset and apply pie correction
+aifC = aif[:,1] / args.pie[0] / 0.06 * np.exp(np.log(2)/122.24*info[0,0])
+if args.dcv != 1:
 
-#Decay correct the AIF 
-aifC = aifC * args.well[0] * np.exp(np.log(2)/122.24*aifTime) / args.pie[0] / 0.06 * np.exp(np.log(2)/122.24*info[0,0])
+	#Reset first two points in AIF which are not traditionally used
+	aifC[0:2] = aifC[2]
 
-#Fit restricted cubic spline to AIF
-aifKnots = nagini.knotLoc(aifTime,args.nKnots[0])
-aifBasis,aifBasisD = nagini.rSplineBasis(aifTime,aifKnots)
-aifCoefs,_,_,_ = np.linalg.lstsq(aifBasis,aifC)
+	#Add well counter and decay correction from start of sampling
+	aifC = aifC * args.well[0] * np.exp(np.log(2)/122.24*aifTime) 
+
+#Get basis for AIF spline
+if args.nKnots is None:
+	nKnots = aifC.shape[0]
+else:
+	nKnots = args.nKnots[0]
+aifKnots = nagini.knotLoc(aifTime,nKnots,bounds=[5,95])
+aifBasis = nagini.rSplineBasis(aifTime,aifKnots)
+
+#Use scikit learn to do a bayesian style ridge regression for spline fit
+bModel = linear_model.BayesianRidge(fit_intercept=True)
+bFit = bModel.fit(aifBasis[:,1::],aifC)
+aifCoefs = np.concatenate((bFit.intercept_[np.newaxis],bFit.coef_))
 
 #Get interpolation times as start to end of pet scan with aif sampling rate
 sampTime = np.min(np.diff(aifTime))
-interpTime = np.arange(petTime[0],petTime[-1]+sampTime,sampTime)
+interpTime = np.arange(np.floor(petTime[0]),np.ceil(petTime[-1]+sampTime),sampTime)
 
 #Make sure we stay within boundaries of pet timing
-if interpTime[-1] > petTime[-1]:
+if interpTime[-1] > np.ceil(petTime[-1]):
 	interpTime = interpTime[:-1]
 
-#Get whole-brain tac and interpolate it
+#Get whole-brain tac
 wbTac = np.mean(petMasked,axis=0)
-wbInterp = interp.interp1d(petTime,wbTac,kind="cubic")(interpTime)
 
 ###################
 ###Model Fitting###
 ###################
 print ('Beginning fitting procedure...')
 
+#Setup the proper model function
+wbInit = [0.0105,0.9]; wbBounds = ([0,0],[0.035,2])
+if args.noDelay == 1:
+	
+	#Interpolate AIF with restricted cubic spline
+	interpBasis = nagini.rSplineBasis(interpTime,aifKnots)
+	interpAif = np.dot(interpBasis,aifCoefs)
+
+	#Model with just flow and lambda
+	wbFunc = nagini.flowTwo(interpTime,interpAif)
+
+elif args.noDisp == 1:
+	
+	#Model with just delay 
+	wbFunc = nagini.flowThreeDelay(aifCoefs,aifKnots,interpTime)
+
+	#Add in starting points and bounds
+	wbInit.append(0); wbBounds[0].append(-50); wbBounds[1].append(50)
+else:
+	
+	#Model with delay and dispersion:
+	wbFunc = nagini.flowFour(aifCoefs,aifKnots,interpTime)
+
+	#Add in starting points and bounds
+	wbInit.extend([0,0]); wbBounds[0].extend([-50,0]); wbBounds[1].extend([50,50])
+
+
 #Attempt to fit model to whole-brain curve
-fourFunc = nagini.flowFour(aifCoefs,aifKnots)
 try:
-	wbOpt,wbCov = opt.curve_fit(fourFunc,interpTime,wbInterp,p0=[0.0105,0.9,-25,-25],bounds=([0,0,-50,-50],[0.035,1.5,50,50]))
+	wbOpt,wbCov = opt.curve_fit(wbFunc,petTime,wbTac,p0=wbInit,bounds=wbBounds)
 except(RuntimeError):
-	print 'ERROR: Cannot estimate four-parameter model on whole-brain curve. Exiting...'
+	print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
 	sys.exit()
 
-#Write out whole-brain values
-wbString = 'CBF = %f\nLambda = %f\nDelay = %f\nDispersion = %f'%(wbOpt[0]*6000.0/1.05,wbOpt[1]*1.05,wbOpt[2],wbOpt[3])
+#Create string for whole-brain parameter estimates
+labels = ['CBF','Lambda','Delay','Dispersion']
+scales = [6000.0/args.d,1/args.d,1.0,1.0]
+wbString = ''
+for pIdx in range(wbOpt.shape[0]):
+	wbString += '%s = %f\n'%(labels[pIdx],wbOpt[pIdx]*scales[pIdx])
+
+#Write out whole-brain results
 try:
 	wbOut = open('%s_wbVals.txt'%(args.out[0]), "w")
 	wbOut.write(wbString)
 	wbOut.close()
 except(IOError):
-	print 'ERROR: Cannot write in output direcotry. Exiting...'
+	print 'ERROR: Cannot write in output directory. Exiting...'
 	sys.exit()
 
 #Get whole brain fitted values
-wbFitted = fourFunc(interpTime,wbOpt[0],wbOpt[1],wbOpt[2],wbOpt[3])
+if args.noDelay == 1:
+	wbFitted = wbFunc(petTime,wbOpt[0],wbOpt[1])
+elif args.noDisp == 1:
+	wbFitted = wbFunc(petTime,wbOpt[0],wbOpt[1],wbOpt[2])
+else:
+	wbFitted = wbFunc(petTime,wbOpt[0],wbOpt[1],wbOpt[2],wbOpt[3])
 
 #Create whole brain fit figure
 try:
@@ -159,26 +214,40 @@ try:
 	#Make fit plot
 	axOne = plt.subplot(gs[0,0])
 	axOne.scatter(petTime,wbTac,s=40,c="black")
-	axOne.plot(interpTime,wbFitted,linewidth=3,label='Model Fit')
+	axOne.plot(petTime,wbFitted,linewidth=3,label='Model Fit')
 	axOne.set_xlabel('Time (seconds)')
 	axOne.set_ylabel('Counts')
 	axOne.set_title('Whole-Brain Time Activity Curve')
 	axOne.legend(loc='upper left')
 
-	#Get delay and dispersion corrected input function
-	cBasis, cBasisD = nagini.rSplineBasis(aifTime+wbOpt[2],aifKnots)
-	cAif = (np.dot(cBasis,aifCoefs) + np.dot(cBasisD,aifCoefs)*wbOpt[3]) * np.exp(np.log(2)/122.24*wbOpt[2])
-
 	#Make input function plot
 	axTwo = plt.subplot(gs[0,1])
 	axTwo.scatter(aifTime,aifC,s=40,c="black")
 	axTwo.plot(aifTime,np.dot(aifBasis,aifCoefs),linewidth=5,label='Spline Fit')
-	axTwo.plot(aifTime,cAif,linewidth=5,c='green',label='Delay+Disp Corrected')
 	axTwo.set_xlabel('Time (seconds)')
 	axTwo.set_ylabel('Counts')
 	axTwo.set_title('Arterial Sampled Input function')
-	axTwo.legend(loc='upper right')
 
+	#Show corrected input funciton as well
+	if args.noDelay != 1:
+		
+		#Interpolate input function and correct for delay
+		cBasis, cBasisD = nagini.rSplineBasis(aifTime+wbOpt[2],aifKnots,dot=True)
+		cAif = np.dot(cBasis,aifCoefs)
+
+		#Correct for dispersion if necessary
+		if args.noDisp != 1:
+			cAif += np.dot(cBasisD,aifCoefs)*wbOpt[3]
+			lLabel = 'Delay+Disp Corrected'
+		else:
+			lLabel = 'Delay Corrected'
+
+		#Create input function plot		
+		axTwo.plot(aifTime,cAif,linewidth=5,c='green',label=lLabel)
+	
+	#Make sure we have legend for input function plot
+	axTwo.legend(loc='upper right')
+	
 	#Add plots to figure
 	fig.add_subplot(axOne); fig.add_subplot(axTwo)
 
@@ -194,14 +263,37 @@ if args.wbOnly == 1:
 	sys.exit()
 
 #Use whole-brain values as initilization
-init = wbOpt
+init = wbOpt; nParam = init.shape[0]
 
-#Set bounds 
-lBounds = [wbOpt[0]/10.0,0,wbOpt[2]/10.0,wbOpt[3]/10.0]
-hBounds = [wbOpt[0]*10.0,1,wbOpt[2]*10.0,wbOpt[3]*10.0]
+#Set default voxelwise bounds
+lBounds = [wbOpt[0]/10.0,0]; hBounds = [wbOpt[0]*10.0,2]
+if args.fModel == 1:
+	for pIdx in range(2,nParam):
+		if wbOpt[pIdx] > 0:
+			lBounds.append(wbOpt[pIdx]/10.0)
+			hBounds.append(wbOpt[pIdx]*10.0)
+		elif wbOpt[pIdx] < 0:
+			lBounds.append(wbOpt[pIdx]*10.0)
+			hBounds.append(wbOpt[pIdx]/10.0)
+		else:
+			lBounds.append(wbBounds[0][pIdx])
+			hBounds.append(wbBounds[1][pIdx])
 bounds = np.array([lBounds,hBounds],dtype=np.float)
+ 
+#Create list of user bounds to check and set initlization
+if args.noDelay == 1 or args.fModel != 1:
+	bCheck = [args.fBound,args.lBound]
+	init = init[0:2]
+elif args.noDisp == 1:
+	bCheck = [args.fBound,args.lBound,args.dBound]
+	init = init[0:3]
+else:
+	bCheck = [args.fBound,args.lBound,args.dBound,args.tBound]
+	init = init[0:4]
+
+#Check user bounds
 bIdx = 0
-for bound in [args.fBound,args.lBound,args.dBound,args.tBound]:
+for bound in bCheck:
 	#If user wants different bounds, use them.
 	if bound is not None:
 		bounds[0,bIdx] = bound[0]
@@ -211,56 +303,67 @@ for bound in [args.fBound,args.lBound,args.dBound,args.tBound]:
 			init[bIdx] = (bound[0]+bound[1]) / 2
 	bIdx += 1
 
-#Setup for optimization
+#Setup for voxelwise-optimization
 nVox = petMasked.shape[0]
-if args.fModel == 1:
-	fitParams = np.zeros((nVox,4)); fitVars = np.zeros((nVox,5))
-	optFunc = fourFunc
+if args.fModel == 1 and args.noDelay != 1:
+	fitParams = np.zeros((nVox,nParam)); fitVars = np.zeros((nVox,nParam+1))
+	optFunc = wbFunc
 else:
 	fitParams = np.zeros((nVox,2)); fitVars = np.zeros((nVox,3))
-	optFunc = nagini.flowTwoSet(aifCoefs,aifKnots,wbOpt[2],wbOpt[3])
-	init = init[0:2]; bounds = bounds[:,0:2]
+
+	#Get proper funciton
+	if args.noDelay == 1:
+		optFunc = wbFunc
+	else:
+		#Interpolate input function using delay
+		voxBasis,voxBasisD = nagini.rSplineBasis(interpTime+wbOpt[2],aifKnots,dot=True)
+		voxAif = np.dot(voxBasis,aifCoefs)
+
+		#Account for dispersion if necessary
+		if args.noDisp != 1:
+			voxAif += np.dot(voxBasisD,aifCoefs)*wbOpt[3]
+
+		optFunc = nagini.flowTwo(interpTime,voxAif)
 
 #Loop through every voxel
 noC = 0
 for voxIdx in tqdm(range(nVox)):
 	
-	#Get voxel tac and then interpolate it
+	#Get voxel tac 
 	voxTac = petMasked[voxIdx,:]
-	voxInterp = interp.interp1d(petTime,voxTac,kind="cubic")(interpTime)
 
 	try:
 		#Run fit
-		voxOpt,voxCov = opt.curve_fit(optFunc,interpTime,voxInterp,p0=init,bounds=bounds)
+		voxOpt,voxCov = opt.curve_fit(optFunc,petTime,voxTac,p0=init,bounds=bounds)
 		
 		#Save common estimates 
 		fitParams[voxIdx,0] = voxOpt[0] * 6000.0 / args.d
-		fitParams[voxIdx,1] = voxOpt[1] * args.d
+		fitParams[voxIdx,1] = voxOpt[1] / args.d
 
 		#Save common variances
 		fitVar = np.diag(voxCov)
 		fitVars[voxIdx,0] = fitVar[0] * np.power(6000.0/args.d,2)
-		fitVars[voxIdx,1] = fitVar[1] * np.power(args.d,2)
+		fitVars[voxIdx,1] = fitVar[1] * np.power(1/args.d,2)
 
 		#Do model specific saving
-		if args.fModel == 1:
-			
-			#Save delay and disperison estimates
-			fitParams[voxIdx,2] = voxOpt[2]
-			fitParams[voxIdx,3] = voxOpt[3]
+		if args.fModel == 1 and args.noDelay !=1:
 
-			#Save delay and dispersion errors
-			fitVars[voxIdx,2:4] = fitVar[2:4]
+			#Save additional parameter estimates
+			fitParams[voxIdx,2:nParam] = voxOpt[2:nParam]
+			fitVars[voxIdx,2:nParam] = fitVar[2:nParam]
 
 			#Calculate model residual
-	 		fitResid = voxInterp - optFunc(interpTime,voxOpt[0],voxOpt[1],voxOpt[2],voxOpt[3])
+			if args.noDisp == 1:
+	 			fitResid = voxTac - optFunc(petTime,voxOpt[0],voxOpt[1],voxOpt[2])
+			else:
+				fitResid = voxTac - optFunc(petTime,voxOpt[0],voxOpt[1],voxOpt[2],voxOpt[3])
 		
 		else:
-			fitResid = voxInterp - optFunc(interpTime,voxOpt[0],voxOpt[1])
+			fitResid = voxTac - optFunc(petTime,voxOpt[0],voxOpt[1])
 
 		#Save normalized root mean square deviation
-		fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxInterp.shape[0])
-		fitParams[voxIdx,-1] = fitRmsd / np.mean(voxInterp)
+		fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0])
+		fitVars[voxIdx,-1] = fitRmsd / np.mean(voxTac)
 
 	except(RuntimeError):
 		noC += 1
@@ -281,9 +384,11 @@ if args.fModel == 1:
 else:
 	paramNames = ['flow','lambda']
 	varNames = ['flowVar','lambdaVar','nRmsd']
-for iIdx in range(len(paramNames)):
-	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],paramNames[iIdx]))
-	nagini.writeMaskedImage(fitVars[:,iIdx],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],varNames[iIdx]))
-nagini.writeMaskedImage(fitVars[:,-1],brain.shape,brainData,brain.affine,'%s_%s'%(args.out[0],varNames[-1]))
+
+#Do the writing
+for iIdx in range(fitParams.shape[1]):
+	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[iIdx]))
+	nagini.writeMaskedImage(fitVars[:,iIdx],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],varNames[iIdx]))
+nagini.writeMaskedImage(fitVars[:,-1],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],varNames[-1]))
 
 

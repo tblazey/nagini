@@ -1,0 +1,229 @@
+functions {
+	
+	// Maximum between a single value x and every value of array y (pmax in R)
+		vector pMax(real x,vector y,int n) {
+		vector[n] maxArray;
+			for (i in 1:n)
+				maxArray[i] = fmax(x,y[i]);
+			return(maxArray);
+	}
+
+	// Elementwise power
+	vector pVec(vector x,int n, int p){
+		vector[n] pX;
+		for (i in 1:n)
+			pX[i] = pow(x[i],p);
+		return(pX);
+	}
+
+	// Elementwise exponent
+	vector eVec(vector x,int n){
+		vector[n] pX;
+		for (i in 1:n)
+			pX[i] = exp(x[i]);
+		return(pX);
+	}
+
+	// Elementwise Heaviside function
+	vector sVec(vector x,int n){
+		vector[n] pX;
+		for (i in 1:n)
+			pX[i] = int_step(x[i]);
+		return(pX);
+	}
+
+	// Compute basis for restricted cubic spline and its derivative
+	matrix[] splineBasis(vector x,int nX,vector knots,int nK){
+
+		// Declare variables
+		matrix[nX,nK] basisMatrix[2];
+		vector[nX] termOne;
+		vector[nX] termOneD;
+		vector[nX] termTwo;
+		vector[nX] termTwoD;
+		real twoScale; 
+		vector[nX] termThree;	
+		vector[nX] termThreeD;
+		real threeScale;
+		real scaleD;
+
+		// Set intercept and x-value basis functions
+		for (i in 1:nX){
+			basisMatrix[1,i,1] = 1; 
+			basisMatrix[2,i,1] = 0;
+			basisMatrix[2,i,2] = 1;
+		}
+		basisMatrix[1,:,2] = x; 
+
+		// Compute the other basis functions
+		for (kIdx in 1:(nK-2)) {
+
+			// First part of basis function
+			termOne = pMax(0,pVec(x-knots[kIdx],nX,3),nX);
+			termOneD = pMax(0,pVec(x-knots[kIdx],nX,2)*3,nX) .* sVec(termOne,nX);
+
+			// Second part of basis function
+			scaleD = knots[nK]-knots[nK-1];
+			twoScale = (knots[nK]-knots[kIdx]) / scaleD;
+			termTwo = pMax(0,pVec(x-knots[nK-1],nX,3),nX) * twoScale;
+			termTwoD = pMax(0,pVec(x-knots[nK-1],nX,2)*3,nX) * twoScale .* sVec(termTwo,nX);
+
+			// Third part of basis function
+			threeScale = (knots[nK-1]-knots[kIdx]) / scaleD;
+			termThree = pMax(0,pVec(x-knots[nK],nX,3),nX) * threeScale;
+			termThreeD = pMax(0,pVec(x-knots[nK],nX,2)*3,nX) * threeScale .* sVec(termThree,nX);
+
+			// Compute the basis function
+			basisMatrix[1,:,(kIdx+2)] = termOne - termTwo + termThree;
+
+			// Compute the derivative
+			basisMatrix[2,:,(kIdx+2)] = termOneD - termTwoD + termThreeD;
+
+		}
+		return(basisMatrix);
+	}
+
+	// Spline interpolation given a set of knots and a set of coefficients.
+	matrix splineInterp(vector x, int nX, vector knots, int nK, vector coefs){
+
+		// Declare variables
+		matrix[nX,2] interpX;	
+		matrix[nX,nK] interpBasis[2];
+
+		// Get spline basis
+		interpBasis = splineBasis(x,nX,knots,nK);
+
+		// Get fitted values
+		interpX[:,1] = interpBasis[1,:,:] * coefs;
+		interpX[:,2] = interpBasis[2,:,:] * coefs;
+		
+		return(interpX);
+	} 
+	
+	// Linear interpolation
+	vector linInterp(vector x,vector y, vector xPrime, int nX, int nPrime){
+		vector[nPrime] yPrime;
+		for (i in 1:nPrime){
+			int k; int j;
+			k = 0; j = 1;
+			while (k==0){
+				//Check to see if current point in loop is boundry point
+				if( xPrime[i]-x[j]<=0 || j==nX ){
+					real yZero; real yOne;
+					real xZero; real xOne;
+					real mu;
+
+					//Account for extrapolation if needed
+					if ( j == 1 ){
+						yZero = y[j]; yOne = y[j+1];
+						xZero = x[j]; xOne = x[j+1];
+					}
+					else{
+						yZero = y[j-1]; yOne = y[j];
+						xZero = x[j-1]; xOne = x[j];
+					}
+
+					//Interpolate point
+					mu = (xPrime[i]-xZero)/(xOne-xZero);
+					yPrime[i] = yZero*(1-mu) + yOne*mu;
+
+					//Break
+					k = 1;
+				}
+				j = j + 1;
+			}
+		}
+		return(yPrime);
+	}
+
+	// Function to perform a nice little convolution
+	vector convolve(vector x, vector y, int n, real step){
+
+		// Declare variables
+		vector[n] c;
+		real cSum;
+
+		#Do some convolving
+		for (i in 1:n) {
+			cSum = 0;
+			for (j in 1:i) {
+				cSum = cSum + (x[j]*y[i-j+1]);
+			}
+			c[i] = cSum * step;
+		}
+		return(c);
+	}
+
+}
+
+data {
+	int nPet;
+	int nAif;
+	int nKnot;
+	vector[nAif] aifTime;
+	vector[nPet] pet;
+	vector[nPet] petTime;
+	vector[nKnot] aifCoefs;
+	vector[nKnot] aifKnots;
+	real aifStep;
+	real dens;
+	real meanPet;
+}
+
+parameters {
+	real<lower=0> flow;
+	real<lower=0> lambda;
+	real<lower=0> delay;
+	real<lower=0> disp;
+	real<lower=0> sigma;
+	real<lower=0> nu;
+}
+
+model {
+	matrix[nAif,2] aifInterp;
+	vector[nAif] aifC;
+	vector[nAif] mu;
+	vector[nPet] petMu;
+
+	//Priors
+	flow ~ cauchy(45,8);
+	lambda ~ cauchy(0.9,0.25);
+	delay ~ cauchy(10,4);
+	disp ~ cauchy(10,4);
+	nu ~ gamma(1.5,0.1);
+	sigma ~ cauchy(300,100);
+
+	//Get interpolated aif. Correct for delay and dispersion
+	aifInterp = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs);
+	aifC = aifInterp[,1] + aifInterp[,2]*disp;
+
+	//Get model predictions
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
+	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	
+	//Define likilihood
+	pet ~ student_t(nu,petMu,sigma);
+}
+
+generated quantities {
+	matrix[nAif,2] aifInterp;
+	vector[nAif] aifC;
+	vector[nAif] mu;
+	vector[nPet] petMu;
+	vector[nPet] petPost;
+	real rmsd;
+		
+	//Get interpolated aif. Correct for delay and dispersion
+	aifInterp = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs);
+	aifC = aifInterp[,1] + aifInterp[,2]*disp;
+
+	//Get model predictions
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
+	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	for (i in 1:nPet)
+		petPost[i] = student_t_rng(nu,petMu[i],sigma);
+
+	//Calculate normalied RMSE
+	rmsd = sqrt(squared_distance(pet,petMu)/nPet) / meanPet;
+}
+

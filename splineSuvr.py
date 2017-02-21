@@ -43,14 +43,14 @@ petMean = np.mean(petMasked,axis=0)
 
 #Get spline knots and basis
 petKnots = nagini.knotLoc(petTime,args.nKnots[0]); petKnots[0] = 10
-petBasis,petDeriv = nagini.rSplineBasis(petTime,petKnots)
+petBasis = nagini.rSplineBasis(petTime,petKnots)
 
 #Fit spline to whole brain
 X,_,_,_ = np.linalg.lstsq(petBasis,petMean)
 
 #Get spline predictions
 timePred = np.linspace(0,petTime[-1],1000)
-predBasis,predDeriv = nagini.rSplineBasis(timePred,petKnots)
+predBasis,predDeriv = nagini.rSplineBasis(timePred,petKnots,dot=True)
 petPred = np.dot(predBasis,X); petPredD = np.dot(predDeriv,X)
 
 #Get timepoints for SUVR window
@@ -59,7 +59,7 @@ endTime = startTime + args.window[0]
 suvrTime = np.linspace(startTime,endTime,100)
 
 #Get new basis
-suvrBasis,_ = nagini.rSplineBasis(suvrTime,petKnots)
+suvrBasis = nagini.rSplineBasis(suvrTime,petKnots)
 
 #Get fits at each voxel
 voxX,_,_,_ = np.linalg.lstsq(petBasis,petMasked.T)
@@ -71,14 +71,14 @@ voxPred = np.dot(suvrBasis,voxX)
 voxSum = np.sum(voxPred,axis=0); voxSum = voxSum / np.mean(voxSum)
 
 #Write out image
-nagini.writeMaskedImage(voxSum,mask.shape,maskData,mask.affine,'%s_suvrSpline'%(args.out[0]))
+nagini.writeMaskedImage(voxSum,mask.shape,maskData,pet.affine,pet.header,'%s_suvrSpline'%(args.out[0]))
 
 #For comparision calculate non-smoothed SUVR
 startFrame = np.where(petTime>=startTime)[0][0]
 endFrame = np.where(petTime<=endTime)[0][-1]
 petSum =  np.sum(petMasked[:,startFrame:(endFrame+1)],axis=1)
 petSum = petSum / np.mean(petSum)
-nagini.writeMaskedImage(petSum,mask.shape,maskData,mask.affine,'%s_suvr'%(args.out[0]))
+nagini.writeMaskedImage(petSum,mask.shape,maskData,pet.affine,pet.header,'%s_suvr'%(args.out[0]))
 
 
 
