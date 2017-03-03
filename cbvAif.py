@@ -36,6 +36,7 @@ argParse.add_argument('well',help='Well-counter calibration factor',nargs=1,type
 argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
 argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
+argParse.add_argument('-decay',help='Perform decay correction before CBV calcuation. By default it occurs within  calculation',action='store_const',const=1)
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-r',help='Mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',default=0.85,metavar='ratio',type=float)
 argParse.add_argument('-nKnots',nargs=1,type=int,help='Number of knots for AIF spline. Default is number of time points.',metavar='n')
@@ -85,15 +86,30 @@ cbvTime = np.array([0.0,info[2]])
 #Get aif time variable
 aifTime = aif[:,0]
 
-#Decay correct the AIF to pet offset and apply pie correction and Yi scale factor
-aifC = aif[:,1] / args.pie[0] / 0.06 * np.exp(np.log(2)/122.24*info[0])
+#Apply pie factor and 4dfp offset factor
+aifC = aif[:,1] / args.pie[0] / 0.06
+
+#Logic for preparing blood sucker curves
 if args.dcv != 1:
 
 	#Reset first two points in AIF which are not traditionally used
 	aifC[0:2] = aifC[2]
 
 	#Add well counter and decay correction from start of sampling
-	aifC = aifC * args.well[0] * np.exp(np.log(2)/122.24*aifTime) 
+	aifC = aifC * args.well[0] 
+
+	#Decay correct each CRV point to start time reported in first saved PET frame
+	if args.decay == 1:
+		aifC *= np.exp(np.log(2)/122.24*info[0]) * np.exp(np.log(2)/122.24*aifTime)
+	else:
+		petMasked /= info[3]
+
+else:
+	if args.decay == 1:
+		aifC *= np.exp(np.log(2)/122.24*info[0])
+	else:
+		aifC /= np.exp(np.log(2)/122.24*aifTime)
+		petMasked /= info[3]
 
 #Set number of knots
 if args.nKnots is None:
@@ -152,6 +168,7 @@ except(RuntimeError,IOError):
 
 #Don't do voxelwise estimation if user says not to
 if args.wbOnly == 1:
+	nagini.writeArgs(args,args.out[0])
 	sys.exit()
 
 #Calculate voxelwise CBV
@@ -159,4 +176,5 @@ cbvData = petMasked * cbvScale
 
 #Write out CBV image
 nagini.writeMaskedImage(cbvData,brain.shape,brainData,pet.affine,pet.header,'%s_cbv'%(args.out[0]))
+nagini.writeArgs(args,args.out[0])
 

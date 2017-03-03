@@ -251,7 +251,7 @@ def flowTwoIdaif(X,flow,lmbda=1):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-flow/lmbda*X[0,:]))*(X[0,1]-X[0,0])
 	return flowConv[0:X.shape[1]]
 
-def flowTwo(aifTime,cAif):
+def flowTwo(aifTime,cAif,decayC,cbv):
 
 	"""
 	
@@ -261,7 +261,11 @@ def flowTwo(aifTime,cAif):
 	aifTime: array
 	   A n length array of AIF sample times
 	cAif: array
-	   A n lenght array of AIF values at aifTime
+	   A n length array of AIF values at aifTime
+	decayC: float
+	   Decay constant for model. Set to 0 for no decay correction.
+	cbv: float
+	   Cerebral blood volume in mL-blood/mL-tissue
 
 	Returns
 	-------
@@ -282,7 +286,7 @@ def flowTwo(aifTime,cAif):
 		----------
 
 		petTime: array
-	   		An n length array pet time points
+	   		An n x2  array pet start and end times
 		flow: float
 	  		Blood flow parameter
 		lmbda: float
@@ -296,13 +300,22 @@ def flowTwo(aifTime,cAif):
 		"""
 		
 		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*aifTime))*(aifTime[1]-aifTime[0])
+		flowConv = np.convolve(flow*cAif,np.exp(-((flow/lmbda)+decayC)*aifTime))[0:aifTime.shape[0]]
+		flowConv *= (aifTime[1]-aifTime[0])
+
+		#Add in CBV if necessary
+		if cbv is not None:
+			flowConv += cAif*cbv
 		
-		#Interpolate predicted response at pet times. Much slower than just interpolating pet data, but I like this better.
-		if np.all(aifTime==petTime):
-			petPred = flowConv[0:aifTime.shape[0]]
-		else:
-			petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTime)
+		#Get interpolation function for model predictions
+		predInterp = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")
+
+		#Interpolate predicted response at start and end times
+		startPred = predInterp(petTime[:,0])
+		endPred = predInterp(petTime[:,1])
+
+		#Calculate average between start and end time. Implies average after trap. integration
+		petPred = (startPred+endPred)/2
 	
 		#Return predictions		
 		return petPred
@@ -310,7 +323,7 @@ def flowTwo(aifTime,cAif):
 	#Return function
 	return flowPred
 
-def flowThreeDelay(aifCoef,aifKnots,aifTime):
+def flowThreeDelay(aifCoef,aifKnots,aifTime,decayC,cbv):
 
 	"""
 	
@@ -323,6 +336,10 @@ def flowThreeDelay(aifCoef,aifKnots,aifTime):
 	   A n length array of knot locations for natural cubic spline
 	aifTime: array
 	   A n length array of times to samples AIF at
+	decayC: float
+	   Decay constant for model. Set to 0 for no decay correction.
+	cbv: float
+	   Cerebral blood volume in mL-blood/mL-tissue
 
 	Returns
 	-------
@@ -343,7 +360,7 @@ def flowThreeDelay(aifCoef,aifKnots,aifTime):
 		----------
 
 		petTime: array
-	   		An n length array pet time points
+	   		An n x 2 array containing frame start and end times
 		flow: float
 	  		Blood flow parameter
 		lmbda: float
@@ -360,13 +377,25 @@ def flowThreeDelay(aifCoef,aifKnots,aifTime):
 		
 		#Remove delay from input function while using spline interpolation
 		cBasis = rSplineBasis(aifTime+delta,aifKnots)
-		cAif = np.dot(cBasis,aifCoef)
+		cAif = np.dot(cBasis,aifCoef) * np.exp(np.log(2)/122.24*delta)
 
-		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*aifTime))*(aifTime[1]-aifTime[0])
+		#Calculate model prediction
+		flowConv = np.convolve(flow*cAif,np.exp(-((flow/lmbda)+decayC)*aifTime))[0:aifTime.shape[0]]
+		flowConv *= (aifTime[1]-aifTime[0])
+
+		#Add in CBV if necessary
+		if cbv is not None:
+			flowConv += cAif*cbv	
 		
-		#Interpolate predicted response at pet times. Much slower than just interpolating pet data, but I like this better.	
-		petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTime)
+		#Get interpolation function for model predictions
+		predInterp = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")
+
+		#Interpolate predicted response at start and end times
+		startPred = predInterp(petTime[:,0])
+		endPred = predInterp(petTime[:,1])
+
+		#Calculate average between start and end time. Implies trap. integration
+		petPred = (startPred+endPred)/2
 	
 		#Return predictions		
 		return petPred
@@ -375,7 +404,7 @@ def flowThreeDelay(aifCoef,aifKnots,aifTime):
 	return flowPred
 
 
-def flowFour(aifCoef,aifKnots,aifTime):
+def flowFour(aifCoef,aifKnots,aifTime,decayC,cbv):
 
 	"""
 	
@@ -390,6 +419,10 @@ def flowFour(aifCoef,aifKnots,aifTime):
 	   A n length array of knot locations for natural cubic spline
         aifTime: array
 	   A m length array giving times to sample AIF at
+	decayC: float
+	   Decay constant for model. Set to 0 for no decay correction.
+	cbv: float
+	   Cerebral blood volume in mL-blood/mL-tissue
 
 	Returns
 	-------
@@ -408,8 +441,8 @@ def flowFour(aifCoef,aifKnots,aifTime):
 
 		Parameters
 		----------
-		petTime: array
-	   		An n length array pet time points
+		petTime: n x 2 array
+	   		An n length array pet time points where first column is start time and second column is end time
 		flow: float
 	  		Blood flow parameter
 		lmbda: float
@@ -430,11 +463,26 @@ def flowFour(aifCoef,aifKnots,aifTime):
 		cBasis, cBasisD = rSplineBasis(aifTime+delta,aifKnots,dot=True)
 		cAif = np.dot(cBasis,aifCoef) + np.dot(cBasisD,aifCoef)*tau
 
+		#Correct AIF for decay during shift
+		cAif *= np.exp(np.log(2)/122.24*delta)
+
 		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAif,np.exp(-flow/lmbda*aifTime))*(aifTime[1]-aifTime[0])
+		flowConv = np.convolve(flow*cAif,np.exp(-((flow/lmbda)+decayC)*aifTime))[0:aifTime.shape[0]]
+		flowConv *= (aifTime[1]-aifTime[0])
 		
-		#Interpolate predicted response at pet times. Much slower than just interpolating pet data, but I like this better.	
-		petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTime)
+		#Add in CBV if necessary
+		if cbv is not None:
+			flowConv += cAif*cbv		
+
+		#Get interpolation function for model predictions
+		predInterp = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")
+
+		#Interpolate predicted response at start and end times
+		startPred = predInterp(petTime[:,0])
+		endPred = predInterp(petTime[:,1])
+
+		#Calculate average between start and end time. Implies averaged after trap. integration
+		petPred = (startPred+endPred)/2
 	
 		#Return predictions		
 		return petPred
@@ -1278,3 +1326,32 @@ def saveRz(dic,fName):
 		print 'ERROR: Cannot save file at %s'%(fName)
 		sys.exit()	
 
+def writeArgs(args,out):
+	
+	"""
+		
+	Saves arguments from argparse to a text file
+	
+	Parameters
+	----------
+	args : argparse arguments
+	out: output path
+
+
+	"""
+
+	#Make string with all arguments
+	argString = ''
+	for arg,value in sorted(vars(args).items()):
+		if type(value) is list: 
+			value = value[0]
+		argString += '%s: %s\n'%(arg,value)
+
+	#Write out arguments
+	try:
+		argOut = open('%s_args.txt'%(out), "w")
+		argOut.write(argString)
+		argOut.close()
+	except(IOError):
+		print 'ERROR: Cannot write in output directory. Exiting...'
+		sys.exit()

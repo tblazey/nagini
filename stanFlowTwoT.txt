@@ -71,10 +71,12 @@ data {
 	vector[nAif] aifTime;
 	vector[nAif] aifC;
 	vector[nPet] pet;
-	vector[nPet] petTime;
+	vector[nPet] petTime[2];
 	real aifStep;
 	real dens;
 	real meanPet;
+	real decay;
+	real cbv;
 }
 
 parameters {
@@ -95,8 +97,8 @@ model {
 	sigma ~ cauchy(300,100);
 
 	//Get model predictions
-	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
-	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-((flow/lambda/6000.0)+decay)*aifTime,nAif),nAif,aifStep) + cbv*aifC;
+	petMu = (linInterp(aifTime,mu,petTime[1],nAif,nPet)+linInterp(aifTime,mu,petTime[2],nAif,nPet))/2.0;
 	
 	//Define likilihood
 	pet ~ student_t(nu,petMu,sigma);
@@ -107,10 +109,14 @@ generated quantities {
 	vector[nPet] petMu;
 	vector[nPet] petPost;
 	real rmsd;
+	real kOne;
+
+	//Calculate kOne
+	kOne = flow/6000*dens/cbv;
 
 	//Get model predictions
-	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
-	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-((flow/lambda/6000.0)+decay)*aifTime,nAif),nAif,aifStep) + cbv*aifC;
+	petMu = (linInterp(aifTime,mu,petTime[1],nAif,nPet)+linInterp(aifTime,mu,petTime[2],nAif,nPet))/2.0;
 	for (i in 1:nPet)
 		petPost[i] = student_t_rng(nu,petMu[i],sigma);
 	

@@ -50,7 +50,7 @@ argParse.add_argument('-decay',help='Decay constant in seconds for estimating wa
 argParse.add_argument('-r',help='Value for the mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',nargs=1,default=0.85,type=float,metavar='ratio')
 argParse.add_argument('-range',help='Time range for OEF estimation in seconds. Default is scan start to 45 seconds. Accepts start/end or numbers',nargs=2,metavar='time')
 argParse.add_argument('-kinetic',help='Use full kinetic modeling instead of autoradiographic method',action='store_const',const=1)
-argParse.add_argument('-eBound',help='Bounds for OEF when using kinetic modeling',nargs=2,type=float,metavar=('lower','upper'))
+argParse.add_argument('-eBound',help='Bounds for OEF when using kinetic modeling. Default is 0 to 1',nargs=2,type=float,metavar=('lower','upper'))
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 args = argParse.parse_args()
 
@@ -182,7 +182,7 @@ if args.kinetic == 1:
 	init = wbFit[0]
 
 	#Set bounds 
-	bounds = np.array([0,1.5],dtype=np.float)
+	bounds = np.array([0,1],dtype=np.float)
 	if args.eBound is not None:
 		bounds[0] = args.eBound[0]
 		bounds[1] = args.eBound[1]

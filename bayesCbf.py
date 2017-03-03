@@ -48,6 +48,8 @@ argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
 argParse.add_argument('brain',help='Brain mask image',nargs=1,type=str)
 argParse.add_argument('roi',help='ROI image.',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
+argParse.add_argument('-cbv',help='CBV image for blood volume correction.',nargs=1,type=str)
+argParse.add_argument('-decay',help='Perform decay correction before modeling. By default it occurs within  model',action='store_const',const=1)
 argParse.add_argument('-nKnots',nargs=1,type=int,help='Number of knots for AIF spline. Default is number of data points',metavar='n')
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 argParse.add_argument('-dcv',action='store_const',const=1,help='AIF is from a DCV file, not a CRV file. Dispersion is not estimated')
@@ -98,21 +100,60 @@ petMasked = petFlat[brainData.flatten()>0,:]
 #Get pet into rois
 petRoi = nagini.roiAvg(petFlat,roiData.flatten())
 
-#Use middle times as pet time. Account for offset
-petTime = info[:,1] - info[0,0]
+#If cbv image is given, load it up
+if args.cbv is not None:
 
-#Get aif time variable
+	#Load in CBV image
+	cbv = nagini.loadHeader(args.cbv[0])
+	if cbv.shape[0:3] != pet.shape[0:3]:
+		print 'ERROR: CBV image does not match PET resolution...'
+		sys.exit()
+	cbvData = cbv.get_data()
+
+	#Get whole brian mean cbv
+	wbCbv = np.mean(cbvData.flatten()[brainData.flatten()>0] / 100 * args.d)
+
+	#Get CBV roi
+	cbvRoi = nagini.roiAvg(cbvData.flatten() / 100 * args.d,roiData.flatten())
+else:
+	#Just use zeros if we don't add a cbv image
+	wbCbv = 0
+	cbvRoi = np.zeros(petRoi.shape[0])
+
+#Get pet start and end times. Assume start of first recorded frame is injection (has an offset which is subtracted out)
+startTime = info[:,0] - info[0,0]
+midTime = info[:,1] - info[0,0]
+endTime = info[:,2] + startTime
+
+#Combine PET start and end times into one array
+petTime = np.stack((startTime,endTime),axis=1)
+
+#Get aif time variable. Assume clock starts at injection.
 aifTime = aif[:,0]
 
-#Decay correct the AIF to pet offset and apply pie correction
-aifC = aif[:,1] / args.pie[0] / 0.06 * np.exp(np.log(2)/122.24*info[0,0])
+#Apply pie factor and 4dfp offset factor
+aifC = aif[:,1] / args.pie[0] / 0.06
+
+#Logic for preparing blood sucker curves
 if args.dcv != 1:
 
 	#Reset first two points in AIF which are not traditionally used
 	aifC[0:2] = aifC[2]
 
 	#Add well counter and decay correction from start of sampling
-	aifC = aifC * args.well[0] * np.exp(np.log(2)/122.24*aifTime) 
+	aifC = aifC * args.well[0] 
+
+	#Decay correct each CRV point to start time reported in first saved PET frame
+	if args.decay == 1:
+		aifC *= np.exp(np.log(2)/122.24*info[0,0]) * np.exp(np.log(2)/122.24*aifTime)
+
+else:
+	#Decay correct DCV file to start frame
+	if args.decay == 1:
+		aifC *= np.exp(np.log(2)/122.24*info[0,0])
+	#Remove decay correction for DCV file
+	else:
+		aifC /= np.exp(np.log(2)/122.24*aifTime)
 
 #Get basis for AIF spline
 if args.nKnots is None:
@@ -130,11 +171,21 @@ aifSpline = np.dot(aifBasis,aifCoefs)
 
 #Get interpolation times as start to end of pet scan with aif sampling rate
 sampTime = np.min(np.diff(aifTime))
-interpTime = np.arange(np.floor(petTime[0]),np.ceil(petTime[-1]+sampTime),sampTime)
+interpTime = np.arange(np.floor(startTime[0]),np.ceil(endTime[-1]+sampTime),sampTime)
 
 #Make sure we stay within boundaries of pet timing
-if interpTime[-1] > np.ceil(petTime[-1]):
+if interpTime[-1] > np.ceil(endTime[-1]):
 	interpTime = interpTime[:-1]
+
+#Setup proper decay constant based on whether or not input is decay corrected
+if args.decay == 1:
+	decayC = 0
+else:
+	decayC = np.log(2)/122.24
+
+	#Remove decay correction from pet data
+	petMasked /= info[:,3]
+	petRoi /= info[:,3]
 
 #Get whole-brain tac
 wbTac = np.mean(petMasked,axis=0)
@@ -146,16 +197,22 @@ wbData = {
 	'nKnot':aifKnots.shape[0],
 	'aifTime':interpTime,
 	'pet':wbTac,
-	'petTime':petTime,
+	'petTime':petTime.T,
 	'aifCoefs':aifCoefs,
 	'aifKnots':aifKnots,
 	'aifStep':sampTime,
 	'dens':args.d[0],
-	'meanPet':np.mean(wbTac)
+	'meanPet':np.mean(wbTac),
+	'decay':decayC,
+	'cbv':wbCbv
 }
 
 #Define  whole-brain parameters and initilizations
-wbPars = ['flow','lambda','delay','disp','nu','sigma','petMu','petPost',"aifC","rmsd"]
+wbPars = ['flow','lambda','delay','nu','sigma','petMu','petPost',"aifC","rmsd"]
+if args.dcv is None:
+	wbPars.append('disp')
+if args.cbv is not None:
+	wbPars.append('kOne')
 
 #Define function for inilization
 def initFunc(disp=True,delay=True):
@@ -178,7 +235,6 @@ if args.dcv is None:
 
 else:
 	wbModelFile = os.path.join(os.path.dirname(os.path.realpath(nagini.__file__)),'stanFlowThreeT.txt')
-	wbPars.remove('disp')	
 	wbInits = initFunc(disp=False)
 
 #Compile the whole-brain model
@@ -189,13 +245,15 @@ wbFit = wbModel.sampling(data=wbData,iter=args.nSamples,
 				chains=args.nChains,thin=args.nThin,
 				pars=wbPars,init=wbInits)
 
+#Set which parameters to extract
+wbParams = ['flow','lambda','delay','nu','sigma']
+if args.dcv is None:
+	wbParams.append('disp')
+if args.cbv is not None:
+	wbParams.append('kOne')
+
 #Get parameter estimates in numpy format. 
-try:
-	wbParams = ['flow','lambda','delay','disp','nu','sigma']
-	wbEst = wbFit.extract(wbParams)
-except(ValueError):
-	wbParams = ['flow','lambda','delay','nu','sigma']
-	wbEst = wbFit.extract(wbParams)
+wbEst = wbFit.extract(wbParams)
 wbEst = np.array([list(i) for i in wbEst.values()])
 
 #Get predictions in numpy format
@@ -212,7 +270,7 @@ rmsdPred = np.array([list(i) for i in rmsdPred.values()])
 
 #Extract rHat
 wbSummary = wbFit.summary()
-wbRhat = wbSummary['summary'][np.in1d(wbSummary['summary_rownames'],wbPars),-1]
+wbRhat = wbSummary['summary'][np.in1d(wbSummary['summary_rownames'],wbParams),-1]
 
 #Write out combined dictionary. Inefficient. Think of something better.
 nagini.saveRz({'wbEst':wbEst,'wbPred':wbPred,'aifPred':aifPred,'wbRhat':wbRhat,'rmsd':rmsdPred},'%s_wbDic.Rdump'%(args.out[0]))
@@ -237,6 +295,7 @@ except(IOError):
 
 #Stop before regional estimates
 if args.wbOnly == 1:
+	nagini.writeArgs(args,args.out[0])
 	sys.exit()
 
 #Correct AIF for estimated delay. Not the most Bayesian thing, but for now...
@@ -246,6 +305,9 @@ aifFit = np.dot(cBasis,aifCoefs)
 #Correct for dispersion if necessary
 if args.dcv is None:
 	aifFit += np.dot(cBasisD,aifCoefs)*np.mean(wbEst[3,:])
+
+#Correct for decay during shift
+aifFit *= np.exp(np.log(2)/122.24*np.mean(wbEst[2,:]))
 		
 #Make data structure for region fit
 regData = {
@@ -253,27 +315,30 @@ regData = {
 	'nAif':interpTime.shape[0],
 	'aifTime':interpTime,
 	'aifC':aifFit,
-	'petTime':petTime,
+	'petTime':petTime.T,
 	'aifStep':sampTime,
-	'dens':args.d[0]
+	'dens':args.d[0],
+	'decay':decayC
 }
 
 #Write out regional data now
 nagini.saveRz(regData,'%s_regData.Rdump'%(args.out[0]))
 
 #Define parameters for regional fits
-regPars = ['flow','lambda','nu','sigma','petMu','petPost','rmsd']
+regPars = ['flow','lambda','nu','sigma','petMu','petPost','rmsd']; regParams = regPars[0:4]
+if args.cbv is not None:
+	regPars.append('kOne'); regParams.append('kOne')
 
 #Compile regional model
 regModelFile = os.path.join(os.path.dirname(os.path.realpath(nagini.__file__)),'stanFlowTwoT.txt')
 regModel = pystan.StanModel(file=regModelFile)
 
 #Make empty data structures for saving all the simulation results
-nRoi = petRoi.shape[0]; nSamples = wbEst.shape[1]
-regEsts = np.zeros((nRoi,4,nSamples))
+nRoi = petRoi.shape[0]; nSamples = wbEst.shape[1]; nParams = len(regParams)
+regEsts = np.zeros((nRoi,nParams,nSamples))
 regPreds = np.zeros((nRoi,2,nSamples,regData['nPet']))
 regRmsds = np.zeros((nRoi,nSamples))
-regRhats = np.zeros((nRoi,4))
+regRhats = np.zeros((nRoi,nParams))
 
 #Loop through regions
 for rIdx in range(nRoi):
@@ -282,6 +347,7 @@ for rIdx in range(nRoi):
 	#Add region's data to stan data dictionary
 	regData['pet'] = petRoi[rIdx,:]
 	regData['meanPet'] = np.mean(petRoi[rIdx,:])
+	regData['cbv'] = cbvRoi[rIdx,0]
 
 	#Do ROI fit
 	regFit = regModel.sampling(data=regData,iter=args.nSamples,
@@ -289,13 +355,13 @@ for rIdx in range(nRoi):
 					pars=regPars,init=initFunc(disp=False,delay=False))
 
 	#Extract regional parameters and predictions
-	regEst = np.array([list(i) for i in regFit.extract(regPars[0:4]).values()])
-	regPred = np.array([list(i) for i in regFit.extract(regPars[4:6]).values()])
-	regRmsd = np.array([list(i) for i in regFit.extract(regPars[6]).values()])
+	regEst = np.array([list(i) for i in regFit.extract(regParams).values()])
+	regPred = np.array([list(i) for i in regFit.extract(['petMu','petPost']).values()])
+	regRmsd = np.array([list(i) for i in regFit.extract(['rmsd']).values()])
 
 	#Get rHat
 	regSummary = regFit.summary()
-	regRhat = regSummary['summary'][np.in1d(regSummary['summary_rownames'],regPars[0:4]),-1]
+	regRhat = regSummary['summary'][np.in1d(regSummary['summary_rownames'],regParams),-1]
 
 	#Save regional parameters and predictions
 	regEsts[rIdx,:,:] = regEst
@@ -305,7 +371,7 @@ for rIdx in range(nRoi):
 
 #Write out regional parameters data
 print 'Saving regional results...'
-nagini.saveRz({'regEsts':regEsts,'regPreds':regPreds,'regRoi':petRoi,'regRhats':regRhats,'regRmsds':regRmsds},'%s_regDic.Rdump'%(args.out[0]))
-
+nagini.saveRz({'regEsts':regEsts,'regPreds':regPreds,'regRoi':petRoi,'regCbv':cbvRoi,'regRhats':regRhats,'regRmsds':regRmsds},'%s_regDic.Rdump'%(args.out[0]))
+nagini.writeArgs(args,args.out[0])
 
 

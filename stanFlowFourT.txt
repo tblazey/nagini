@@ -162,12 +162,14 @@ data {
 	int nKnot;
 	vector[nAif] aifTime;
 	vector[nPet] pet;
-	vector[nPet] petTime;
+	vector[nPet] petTime[2];
 	vector[nKnot] aifCoefs;
 	vector[nKnot] aifKnots;
 	real aifStep;
 	real dens;
 	real meanPet;
+	real decay;
+	real cbv;
 }
 
 parameters {
@@ -195,11 +197,11 @@ model {
 
 	//Get interpolated aif. Correct for delay and dispersion
 	aifInterp = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs);
-	aifC = aifInterp[,1] + aifInterp[,2]*disp;
+	aifC = (aifInterp[,1] + aifInterp[,2]*disp)*exp(log(2)/122.24*delay);
 
 	//Get model predictions
-	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
-	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-((flow/lambda/6000.0)+decay)*aifTime,nAif),nAif,aifStep) + cbv*aifC;
+	petMu = (linInterp(aifTime,mu,petTime[1],nAif,nPet)+linInterp(aifTime,mu,petTime[2],nAif,nPet))/2.0;
 	
 	//Define likilihood
 	pet ~ student_t(nu,petMu,sigma);
@@ -212,14 +214,18 @@ generated quantities {
 	vector[nPet] petMu;
 	vector[nPet] petPost;
 	real rmsd;
+	real kOne;
+
+	//Calculate kOne
+	kOne = flow/6000*dens/cbv;
 		
 	//Get interpolated aif. Correct for delay and dispersion
 	aifInterp = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs);
-	aifC = aifInterp[,1] + aifInterp[,2]*disp;
+	aifC = (aifInterp[,1] + aifInterp[,2]*disp)*exp(log(2)/122.24*delay);
 
 	//Get model predictions
-	mu = convolve((flow/6000.0*dens)*aifC,eVec(-(flow/lambda/6000.0)*aifTime,nAif),nAif,aifStep);
-	petMu = linInterp(aifTime,mu,petTime,nAif,nPet);
+	mu = convolve((flow/6000.0*dens)*aifC,eVec(-((flow/lambda/6000.0)+decay)*aifTime,nAif),nAif,aifStep) + cbv*aifC;
+	petMu = (linInterp(aifTime,mu,petTime[1],nAif,nPet)+linInterp(aifTime,mu,petTime[2],nAif,nPet))/2.0;
 	for (i in 1:nPet)
 		petPost[i] = student_t_rng(nu,petMu[i],sigma);
 
