@@ -29,13 +29,13 @@ blazey@wustl.edu
 
 import argparse, sys
 argParse = argparse.ArgumentParser(description='Estimates cerebral blood flow using:')
-argParse.add_argument('pet',help='Nifti water image',nargs=1,type=str)
+argParse.add_argument('pet',help='Nifti oc image',nargs=1,type=str)
 argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('aif',help='Arterial-sampled input function',nargs=1,type=str)
 argParse.add_argument('well',help='Well-counter calibration factor',nargs=1,type=float)
 argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
-argParse.add_argument('brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
+argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('-decay',help='Perform decay correction before CBV calcuation. By default it occurs within  calculation',action='store_const',const=1)
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-r',help='Mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',default=0.85,metavar='ratio',type=float)
@@ -66,16 +66,32 @@ info = nagini.loadInfo(args.info[0])
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
-brain = nagini.loadHeader(args.brain[0]) 
 
 #Check to make sure dimensions match
-if pet.shape[0:3] != brain.shape[0:3] or pet.shape[3] != len(info.shape) or len(info.shape) != 1:
+if pet.shape[3] != len(info.shape) or len(info.shape) != 1:
 	print 'ERROR: Data dimensions do not match. Please check...'
 	sys.exit()
 
 #Get the image data
 petData = pet.get_data()
-brainData = brain.get_data()
+
+#Brain mask logic
+if args.brain is not None:
+
+	#Load brain mask header
+	brain = nagini.loadHeader(args.brain[0])
+
+	#Make sure its dimensions match
+	if pet.shape[0:3] != brain.shape[0:3]:
+		print 'ERROR: Mask dimensiosn do not match data. Please check...'
+		sys.exit()
+
+	#Load in  mask data
+	brainData = brain.get_data()
+
+else:
+	#Make a fake mask
+	brainData = np.ones(pet.shape[0:3])
 
 #Flatten the PET images and then mask
 petMasked = petData.flatten()[brainData.flatten()>0]
@@ -175,6 +191,6 @@ if args.wbOnly == 1:
 cbvData = petMasked * cbvScale
 
 #Write out CBV image
-nagini.writeMaskedImage(cbvData,brain.shape,brainData,pet.affine,pet.header,'%s_cbv'%(args.out[0]))
+nagini.writeMaskedImage(cbvData,brainData.shape,brainData,pet.affine,pet.header,'%s_cbv'%(args.out[0]))
 nagini.writeArgs(args,args.out[0])
 

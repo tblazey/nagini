@@ -48,11 +48,6 @@ import numpy as np, nibabel as nib, nagini, sys, scipy.stats as stats
 imgOne = nagini.loadHeader(args.imgOne[0])
 imgTwo = nagini.loadHeader(args.imgTwo[0])
 
-#Make sure images are 3D
-if len(imgOne.shape) != 3 or len(imgTwo.shape) != 3:
-	print 'ERROR: Images are not 3D.'
-	sys.exit()
-
 #Check to make sure dimensions match
 if imgOne.shape != imgOne.shape:
 	print 'ERROR: Data dimensions do not match. Please check...'
