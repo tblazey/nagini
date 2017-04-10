@@ -15,21 +15,35 @@ loadAif: Loads in standard Wash U .crt file
 reshape4d: Reshape a 4d image to a 2d image (perserves the last dimension)
 loadInfo: Reads in Yi Su style info file
 writeText: Simple wrapper for numpy.savetxt
-flowTwoIdaif: Produces model fit for two-paramter water model.
+flowTwoIdaif: Produces model fit for two-parameter water model.
+flowTwo: Produces model for for two-parameter water model. Allows for masking for PET data.
 flowThreeDelay: Produces model fit for two-paramter water model with delay.
 flowFour: Produces model fit for two-parameter water model with variable delay and dispersion.
-flowFourMl: Returns the negative log-likelihood for two-parameter model water model with variable delay and dispersion.
+mixedLl: Produces negative log-likelihood of linear mixed model
 flowThreeIdaif: Produces model fit for three-parameter water model (volume component).
-gluThreeIdaif: Produces model fit for three-parameter fdg model.
+gluThree: Produces model fit for three-parameter fdg model.
 gluIdaifLin: Calculates model fit for linearized version of three-parameter fdg model
-gluGefIdaif: Computes model fit for three-parameter FDG model while using CBF to estimate GEF
 gluFourIdaif: Produces model fit for four-parameter fdg model.
-oefCalcIdaif: Calculates OEF using the stanard Mintun model.
-oxyOneIdaif: Procuces model fit for one-parameter Mintun oxygen model given CBF, lambda, and CBV.
+oefCalc: Calculates OEF using the stanard Mintun model.
+oxyOne: Procuces model fit for one-parameter Mintun oxygen model given CBF, lambda, and CBV.
 tfceScore: Calculates threshold free cluster enhancement for a statistic image. Not complete
 rSplineBasis: Produces a restricted spline basis withs options for derivaties and integrals
 knotLoc: Determines location of knots for cubic spline using percentiles
+roiAvg: Calculates ROI averages
+roiBack: Puts ROI averages back into an image
 saveGz: Saves a gzipped .npy file
+saveRz: Saves and then compresses a python directionary in R dump format
+writeArgs: Writes input arguments for argparse to a text file
+loadDta: Loads a DTA file
+toSeconds: Converts time from minutes.seconds to seconds
+corrData: Decay correction for hand-drawn counts from DTA files
+gluDelayLst: Computes model prediction for Powers C11 glucose model, with delay
+gluAifLst: Computes model prediction for Powers C11 glucose model, no delay
+golishModel: Computes model for Golish AIF model
+golishModelDeriv: Computes derivaties for Golish AIF model
+fengModel: Returns model predictions for Feng AIF model
+fengModelGlobal: Produces sum of squares error for Feng AIF model
+segModel: Model predictions for piecewise linear fit (three segments)
 
 
 """
@@ -37,6 +51,7 @@ saveGz: Saves a gzipped .npy file
 #What libraries do we need
 import numpy as np, nibabel as nib, sys, scipy.ndimage as img
 import scipy.interpolate as interp, subprocess as sub, scipy.special as spec
+import scipy.integrate as integ
 
 #Only import pystan if we can
 try:
@@ -230,7 +245,7 @@ def flowTwoIdaif(X,flow,lmbda=1):
 	"""
 
 	scipy.optimize.curvefit model function for the two-paramter model flow model.
-	Does not correct for delay or dispersion of input function, so only for use with an IDAIF
+	Does not correct for delay or dispersion of input function
 
 	Parameters
 	----------
@@ -715,34 +730,6 @@ def gluThree(aifTime,aifC,cbf=None):
 
 	#Return prediction function
 	return gluPred
-
-def gluThreeIdaif(X,kOne,kTwo,kThree):
-	"""
-
-	scipy.optimize.curvefit model function for the three-parameter FDG model.
-	Does not correct for delay or dispersion of input function, so only for use with an IDAIF
-
-	Parameters
-	----------
-	X : array
-	   A [2,n] numpy array where the first row is time and the second the input function
-	kOne : float
-	   kOne parameter
-	kTwo: float
-	   kTwo parameter
-	kThree: float
-	   kThree paramter
-
-	Returns
-	-------
-	cT : array
-	   A n length array with the model predictions given kOne,kTwo,and kThree
-
-	"""
-	minTime = X[0,1] - X[0,0]
-   	cOne = np.convolve(X[1,:],kOne*np.exp(-(kTwo+kThree)*X[0,:]))*minTime
-	cTwo = np.convolve(X[1,:],((kOne*kThree)/(kTwo+kThree))*(1-np.exp(-(kTwo+kThree)*X[0,:])))*minTime
-	return cOne[0:X.shape[1]] + cTwo[0:X.shape[1]]
 
 def gluIdaifLin(X,bOne,bTwo,bThree):
 
@@ -1470,7 +1457,8 @@ def corrDta(dta,hLife,bDens,toDraw=True):
 
 	return drawTime,corrCounts
 
-def gluDelay(aifCoef,aifTime,flow,vb,plasma=False,hct=None):
+
+def gluDelayLst(aifCoef,aifTime,pet,flow,vb):
 
 	"""
 
@@ -1481,14 +1469,12 @@ def gluDelay(aifCoef,aifTime,flow,vb,plasma=False,hct=None):
 	   An array of coefficients for Feng Model
 	aifTime: array
 	   A n length array of times to samples AIF at
+	pet:
+	   A m length array of pet data
 	flow: float
 	   flow from blood flow model (CBF/CBV). In seconds
 	vb: float
 	   Fractional blood volume. In mL-blood/mL-tissue
-	plasma: logical
-	   Inicates whether or not AIF is plasma.
-	hct: float
-	   Hematocrit. Needed for correction of AIF from plasma to whole blood
 
 	Returns
 	-------
@@ -1497,95 +1483,94 @@ def gluDelay(aifCoef,aifTime,flow,vb,plasma=False,hct=None):
 
 	"""
 
-	def gluPred(petTime,gef,kTwo,kThree,kFour,delta):
+	def gluPred(petTime,b1,b2,delta,coefs=False):
 
 
 		"""
 
-		Produces a five parameter glucose model fit function for scipy curvefit
+		Produces a three parameter glucose model fit function for scipy curvefit
 
 		Parameters
 		----------
 
 		petTime: array
-	   	   An n x 2 array containing frame start and end times
-		gef: float
-	  	   Glucose extraction fraction
-		kTwo: float
-		   Efflux from compartment 2 to outside FOV
-		kThree:
-		   Efflux from compartment 2 to compartment 3
-		kFour:
-		   Efflux from compartment 3 to compartment 4
+	   	   An m x 2 array containing frame start and end times
+		b1: float
+	  	   First exponential parameter
+		b2: float
+		   Second exponential parameter
 		delta: float
 			Delay parameter
+		coefs: logical
+			If true, return estimated coefficients. If only returns predictions
 
 		Returns
 		-------
 		petPred: array
 			A n length array of model predictions given parameters
+		petCoefs: array
+		    A 4x1 array containing the estimated model coefficients
 
 		"""
 
-		#Add scales to parameters		
-		gef *= 0.202
-		kTwo *= 0.00389
-		kThree *= 0.00473
-		kFour *= 0.000303
+		#Scale beta parameters
+		b1 *= 0.005
+		b2 *= 0.00016
 
 		#Get delay corrected input function
-		cAif = fengModel(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],
+		wbAif = fengModel(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],
 		                 aifCoef[5],aifCoef[6])
 
 		#Correct input function for decay during delay
-		cAif *= np.exp(np.log(2)/1220.04*delta)
+		wbAif *= np.exp(np.log(2)/1220.04*delta)
 
 		#Calculate concentration in compartment one
-		cOne = vb*cAif
+		cOne = vb*wbAif
 
-		#Correct for plasma if necessary
-		if plasma is True and hct is not None:
-			cOne *= (1 - (0.3*hct))
+		#Interpolate compartment one
+		cOneInterp = interp.interp1d(aifTime,cOne,kind='linear')
+		cOnePet = (cOneInterp(petTime[:,0])+cOneInterp(petTime[:,1]))/2.0
 
-		#Calculate concentration in compartment two
-		twoLoss = kTwo+kThree
-		twoIn = vb*flow*gef*cAif
-		cTwo = np.convolve(twoIn,np.exp(-twoLoss*aifTime))[0:aifTime.shape[0]]
+		#Convert AIF to plasma
+		pAif = wbAif*(1.19 + -0.002*aifTime/60.0)
 
-		#Calculate concentration in compartment three
-		threeLoss = kFour
-		threeIn = (twoIn*kThree)/(twoLoss-threeLoss)
-		threeConv = np.exp(-threeLoss*aifTime) - np.exp(-twoLoss*aifTime)
-		cThree = np.convolve(threeIn,threeConv)[0:aifTime.shape[0]]
+		#Remove metabolites from plasma input function\
+		pAif *=  (1 - (4.983e-05*aifTime))
 
-		#Calcculate concentration in compartment four
-		fourLoss = flow
-		fourIn = twoIn*kThree*kFour
-		fourConv = np.exp(-twoLoss*aifTime)/((threeLoss-twoLoss)*(fourLoss-twoLoss))
-		fourConv += np.exp(-threeLoss*aifTime)/((twoLoss-threeLoss)*(fourLoss-threeLoss))
-		fourConv += np.exp(-fourLoss*aifTime)/((twoLoss-fourLoss)*(threeLoss-fourLoss))
-		cFour = np.convolve(fourIn,fourConv)[0:aifTime.shape[0]]
+		#Compute first basis function
+		bfOne = np.convolve(pAif,np.exp(-b1*aifTime))[0:aifTime.shape[0]]
 
-		#Calculate total tissue concentration
-		cT = cOne + (cTwo + cThree + cFour)*(aifTime[1]-aifTime[0])
+		#Interpolate first basis function
+		aifStep = aifTime[1]-aifTime[0]
+		bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
+		bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
 
-		#Get interpolation function for model predictions
-		predInterp = interp.interp1d(aifTime,cT,kind="linear")
+		#Compute second basis function
+		bfTwo = np.convolve(pAif,np.exp(-b2*aifTime)/(b1-b2) +
+								   np.exp(-b2*aifTime)*b2/((b1-b2)*(flow-b2)) +
+								   np.exp(-flow*aifTime)*b2/((b1-flow)*(b2-flow)))[0:aifTime.shape[0]]
 
-		#Interpolate predicted response at start and end times
-		startPred = predInterp(petTime[:,0])
-		endPred = predInterp(petTime[:,1])
+		#Interpolate second basis function
+		bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
+		bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
 
-		#Calculate average between start and end time. Implies trap. integration
-		petPred = (startPred+endPred)/2
+		#Compute the alphas using linear least squares
+		petX = np.stack((bfOnePet,bfTwoPet),axis=1)
+		alpha,_,_,_ = np.linalg.lstsq(petX,pet-cOnePet)
 
-		#Return predictions
-		return petPred
+		#Calculate model prediction
+		petPred = cOnePet + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
+
+		#Return total tissue predictions
+		if coefs is False:
+				return petPred
+		else:
+			return petPred,np.array([alpha[0],alpha[1],b1,b2])
 
 	#Return function
 	return gluPred
 
-def gluAif(aifTime,cAif,flow,vb,plasma=False,hct=None):
+def gluAifLst(aifTime,pAif,pet,cOne,flow):
 
 	"""
 
@@ -1594,104 +1579,89 @@ def gluAif(aifTime,cAif,flow,vb,plasma=False,hct=None):
 
 	aifTime: array
 	   A n length array of times to samples AIF at
-	cAif: array
-	   An n length array containing the blood curve
+	pAif: array
+	   A n length array of plasma aif samples
+	pet: array
+	   A m length array of pet data.
+	cOne: array
+	   A m length array of pet concentration in vascular compartment
 	flow: float
 	   flow from blood flow model (CBF/CBV). In seconds
-	vb: float
-	   Fractional blood volume. In mL-blood/mL-tissue
-	plasma: logical
-	   Inicates whether or not AIF is plasma.
-	hct: float
-	   Hematocrit. Needed for correction of AIF from plasma to whole blood
 
 	Returns
 	-------
 	gluPred: function
-		A function that will return the four-parameter glucose model prections
+		A function that will return the five-parameter glucose model prections
 
 	"""
 
-	#Calculate concentration in compartment one
-	cOne = vb*cAif
+	#Remove vascular component from tac
+	pet -= cOne
 
-	#Correct for plasma if necessary
-	if plasma is True and hct is not None:
-		cOne *= (1 - (0.3*hct))
-
-
-	def gluPred(petTime,gef,kTwo,kThree,kFour):
+	def gluPred(petTime,b1,b2,coefs=False):
 
 
 		"""
 
-		Produces a four parameter glucose model fit function for scipy curvefit
+		Produces a two parameter glucose model fit function for scipy curvefit
 
 		Parameters
 		----------
 
 		petTime: array
-	   	   An n x 2 array containing frame start and end times
-		gef: float
-	  	   Glucose extraction fraction
-		kTwo: float
-		   Efflux from compartment 2 to outside FOV
-		kThree:
-		   Efflux from compartment 2 to compartment 3
-		kFour:
-		   Efflux from compartment 3 to compartment 4
+	   	   An m x 2 array containing frame start and end times
+		b1: float
+	  	   First exponential parameter
+		b2: float
+		   Second exponential parameter
+		coefs: logical
+			If true, return estimated coefficients. If false return predictions
 
 		Returns
 		-------
 		petPred: array
 			A n length array of model predictions given parameters
+		petCoefs: array
+	        A 4x1 array containing the estimated model coefficients
 
 		"""
 
-		#Scale paramters
-		gef *= 0.202
-		kTwo *= 0.00389
-		kThree *= 0.00473
-		kFour *= 0.000303
+		#Scale beta parameters
+		b1 *= 0.005
+		b2 *= 0.00016
 
-		#Calculate concentration in compartment two
-		twoLoss = kTwo+kThree
-		twoIn = vb*flow*gef*cAif
-		cTwo = np.convolve(twoIn,np.exp(-twoLoss*aifTime))[0:aifTime.shape[0]]
+		#Compute first basis function
+		bfOne = np.convolve(pAif,np.exp(-b1*aifTime))[0:aifTime.shape[0]]
 
-		#Calculate concentration in compartment three
-		threeLoss = kFour
-		threeIn = (twoIn*kThree)/(twoLoss-threeLoss)
-		threeConv = np.exp(-threeLoss*aifTime) - np.exp(-twoLoss*aifTime)
-		cThree = np.convolve(threeIn,threeConv)[0:aifTime.shape[0]]
+		#Interpolate first basis function
+		aifStep = aifTime[1]-aifTime[0]
+		bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
+		bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
 
-		#Calcculate concentration in compartment four
-		fourLoss = flow
-		fourIn = twoIn*kThree*kFour
-		fourConv = np.exp(-twoLoss*aifTime)/((threeLoss-twoLoss)*(fourLoss-twoLoss))
-		fourConv += np.exp(-threeLoss*aifTime)/((twoLoss-threeLoss)*(fourLoss-threeLoss))
-		fourConv += np.exp(-fourLoss*aifTime)/((twoLoss-fourLoss)*(threeLoss-fourLoss))
-		cFour = np.convolve(fourIn,fourConv)[0:aifTime.shape[0]]
+		#Compute second basis function
+		bfTwo = np.convolve(pAif,np.exp(-b2*aifTime)/(b1-b2) +
+								   np.exp(-b2*aifTime)*b2/((b1-b2)*(flow-b2)) +
+								   np.exp(-flow*aifTime)*b2/((b1-flow)*(b2-flow)))[0:aifTime.shape[0]]
 
-		#Calculate total tissue concentration
-		cT = cOne + (cTwo + cThree + cFour)*(aifTime[1]-aifTime[0])
+		#Interpolate second basis function
+		bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
+		bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
 
-		#Get interpolation function for model predictions
-		predInterp = interp.interp1d(aifTime,cT,kind="linear")
+		#Compute the alphas using linear least squares
+		petX = np.stack((bfOnePet,bfTwoPet),axis=1)
+		alpha,_,_,_ = np.linalg.lstsq(petX,pet)
 
-		#Interpolate predicted response at start and end times
-		startPred = predInterp(petTime[:,0])
-		endPred = predInterp(petTime[:,1])
+		#Calculate model prediction
+		petPred = cOne + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
 
-		#Calculate average between start and end time. Implies trap. integration
-		petPred = (startPred+endPred)/2
-
-		#Return predictions
-		return petPred
+		#Return total tissue predictions
+		if coefs is False:
+			return petPred
+		else:
+			return petPred,np.array([alpha[0],alpha[1],b1,b2])
 
 	#Return function
 	return gluPred
-
 
 def golishModel(t,cMax,cZero,alpha,beta,tZero,tau):
 
@@ -1863,28 +1833,11 @@ def fengModelGlobal(param,t,y):
 
 	"""
 
-	#Reanme parameters
-	tau = param[0]
-	aOne = param[1]
-	aTwo = param[2]
-	aThree = param[3]
-	eOne = param[4]
-	eTwo = param[5]
-	eThree = param[6]
-
-	#Get components
-	one = (aOne*(t-tau)-aTwo-aThree)*np.exp(eOne*(t-tau))
-	two = aTwo*np.exp(eTwo*(t-tau))
-	three = aThree*np.exp(eThree*(t-tau))
-
-	#Get sum
-	fit = one+two+three
-
-	#Set points where t is less than tau to zero
-	fit[t<tau] = 0.0
+	#Get model predictions
+	fengPred = fengModel(t,param[0],param[1],param[2],param[3],param[4],param[5],param[6])
 
 	#Return sum of squares error
-	return np.sum(np.power(fit-y,2))
+	return np.sum(np.power(y-pred,2))
 
 def segModel(t,iOne,iTwo,iThree,sOne,sTwo,sThree,bOne=100,bTwo=1000):
 

@@ -9,7 +9,7 @@
 bayesCbf.py: Calculates CBF using a 015 water scan and an arterial sampled input function
 
 Uses model described by Mintun et al, Journal of Nuclear 1983
-	
+
 Produces the following outputs:
 	wb -> Text file with estimates to whole-brian curve
 	wbPlot -> Plot of whole-brain curve, fit, and input function
@@ -80,7 +80,7 @@ info = nagini.loadInfo(args.info[0])
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
-brain = nagini.loadHeader(args.brain[0]) 
+brain = nagini.loadHeader(args.brain[0])
 roi = nagini.loadHeader(args.roi[0])
 
 #Check to make sure dimensions match
@@ -141,7 +141,7 @@ if args.dcv != 1:
 	aifC[0:2] = aifC[2]
 
 	#Add well counter and decay correction from start of sampling
-	aifC = aifC * args.well[0] 
+	aifC = aifC * args.well[0]
 
 	#Decay correct each CRV point to start time reported in first saved PET frame
 	if args.decay == 1:
@@ -208,7 +208,7 @@ wbData = {
 }
 
 #Define  whole-brain parameters and initilizations
-wbPars = ['flow','lambda','delay','nu','sigma','petMu','petPost',"aifC","rmsd"]
+wbPars = ['flow','lambda','delay','nu','sigma']
 if args.dcv is None:
 	wbPars.append('disp')
 if args.cbv is not None:
@@ -252,7 +252,7 @@ if args.dcv is None:
 if args.cbv is not None:
 	wbParams.append('kOne')
 
-#Get parameter estimates in numpy format. 
+#Get parameter estimates in numpy format.
 wbEst = wbFit.extract(wbParams)
 wbEst = np.array([list(i) for i in wbEst.values()])
 
@@ -308,7 +308,7 @@ if args.dcv is None:
 
 #Correct for decay during shift
 aifFit *= np.exp(np.log(2)/122.24*np.mean(wbEst[2,:]))
-		
+
 #Make data structure for region fit
 regData = {
 	'nPet':petTime.shape[0],
@@ -373,5 +373,3 @@ for rIdx in range(nRoi):
 print 'Saving regional results...'
 nagini.saveRz({'regEsts':regEsts,'regPreds':regPreds,'regRoi':petRoi,'regCbv':cbvRoi,'regRhats':regRhats,'regRmsds':regRmsds},'%s_regDic.Rdump'%(args.out[0]))
 nagini.writeArgs(args,args.out[0])
-
-

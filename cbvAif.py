@@ -9,7 +9,7 @@
 cbvAif.py: Calculates CBV using a CO15 water scan and an arterial sampled input function
 
 Uses model described by Mintun et al, Journal of Nuclear 1983
-	
+
 Produces the following outputs:
 	wbVal -> Text file with whole-brain CBV estimate
 	aifPlot -> Plot input function
@@ -67,11 +67,6 @@ info = nagini.loadInfo(args.info[0])
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
 
-#Check to make sure dimensions match
-if pet.shape[3] != len(info.shape) or len(info.shape) != 1:
-	print 'ERROR: Data dimensions do not match. Please check...'
-	sys.exit()
-
 #Get the image data
 petData = pet.get_data()
 
@@ -112,7 +107,7 @@ if args.dcv != 1:
 	aifC[0:2] = aifC[2]
 
 	#Add well counter and decay correction from start of sampling
-	aifC = aifC * args.well[0] 
+	aifC = aifC * args.well[0]
 
 	#Decay correct each CRV point to start time reported in first saved PET frame
 	if args.decay == 1:
@@ -142,7 +137,7 @@ bModel = linear_model.ARDRegression(fit_intercept=True)
 bFit = bModel.fit(aifBasis[:,1::],aifC)
 aifCoefs = np.concatenate((bFit.intercept_[np.newaxis],bFit.coef_))
 
-#Get basis for interpolating integral of spline at CBV time 
+#Get basis for interpolating integral of spline at CBV time
 pBasis,pBasisI = nagini.rSplineBasis(cbvTime,aifKnots,dDot=True)
 
 #Get integral of input function from start to end of CBV frame
@@ -169,8 +164,8 @@ except(IOError):
 
 #Create aif figure
 try:
-	plt.clf()	
-	fig = plt.figure(1) 
+	plt.clf()
+	fig = plt.figure(1)
 	plt.scatter(aifTime,aifC,s=40,c="black")
 	plt.plot(aifTime,np.dot(aifBasis,aifCoefs),linewidth=5,label='Spline Fit')
 	plt.xlabel('Time (seconds)')
@@ -193,4 +188,3 @@ cbvData = petMasked * cbvScale
 #Write out CBV image
 nagini.writeMaskedImage(cbvData,brainData.shape,brainData,pet.affine,pet.header,'%s_cbv'%(args.out[0]))
 nagini.writeArgs(args,args.out[0])
-

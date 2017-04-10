@@ -1,5 +1,5 @@
 functions {
-	
+
 	// Maximum between a single value x and every value of array y (pmax in R)
 		vector pMax(real x,vector y,int n) {
 		vector[n] maxArray;
@@ -41,19 +41,19 @@ functions {
 		vector[nX] termOneD;
 		vector[nX] termTwo;
 		vector[nX] termTwoD;
-		real twoScale; 
-		vector[nX] termThree;	
+		real twoScale;
+		vector[nX] termThree;
 		vector[nX] termThreeD;
 		real threeScale;
 		real scaleD;
 
 		// Set intercept and x-value basis functions
 		for (i in 1:nX){
-			basisMatrix[1,i,1] = 1; 
+			basisMatrix[1,i,1] = 1;
 			basisMatrix[2,i,1] = 0;
 			basisMatrix[2,i,2] = 1;
 		}
-		basisMatrix[1,:,2] = x; 
+		basisMatrix[1,:,2] = x;
 
 		// Compute the other basis functions
 		for (kIdx in 1:(nK-2)) {
@@ -87,7 +87,7 @@ functions {
 	matrix splineInterp(vector x, int nX, vector knots, int nK, vector coefs){
 
 		// Declare variables
-		matrix[nX,2] interpX;	
+		matrix[nX,2] interpX;
 		matrix[nX,nK] interpBasis[2];
 
 		// Get spline basis
@@ -96,10 +96,10 @@ functions {
 		// Get fitted values
 		interpX[:,1] = interpBasis[1,:,:] * coefs;
 		interpX[:,2] = interpBasis[2,:,:] * coefs;
-		
+
 		return(interpX);
-	} 
-	
+	}
+
 	// Linear interpolation
 	vector linInterp(vector x,vector y, vector xPrime, int nX, int nPrime){
 		vector[nPrime] yPrime;
@@ -202,7 +202,7 @@ model {
 	//Get model predictions
 	mu = convolve((flow/6000.0*dens)*aifC,eVec(-((flow/lambda/6000.0)+decay)*aifTime,nAif),nAif,aifStep) + cbv*aifC;
 	petMu = (linInterp(aifTime,mu,petTime[1],nAif,nPet)+linInterp(aifTime,mu,petTime[2],nAif,nPet))/2.0;
-	
+
 	//Define likilihood
 	pet ~ student_t(nu,petMu,sigma);
 }
@@ -218,7 +218,7 @@ generated quantities {
 
 	//Calculate kOne
 	kOne = flow/6000*dens/cbv;
-		
+
 	//Get interpolated aif. Correct for delay and dispersion
 	aifInterp = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs);
 	aifC = (aifInterp[,1] + aifInterp[,2]*disp)*exp(log(2)/122.24*delay);
@@ -232,4 +232,3 @@ generated quantities {
 	//Calculate normalied RMSE
 	rmsd = sqrt(squared_distance(pet,petMu)/nPet) / meanPet;
 }
-
