@@ -1723,7 +1723,7 @@ def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,petSum,flow,vb,pen,penC,co
 			coefs: array
 				A 4x1 array of coefficients
 
-			"""
+		"""
 
 	#Rename and scale parameters
 	b1 = params[0] * 0.015
@@ -1822,7 +1822,7 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,petSum,cOne,flow,pen,penC,coefs
 			coefs: array
 				A 4x1 array of coefficients
 
-			"""
+		"""
 
 	#Scale beta parameters
 	b1 = params[0] * 0.015
