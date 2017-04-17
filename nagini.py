@@ -1682,48 +1682,48 @@ def gluAifLst(aifTime,pAif,pet,cOne,flow):
 
 def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,petSum,flow,vb,pen,penC,coefs=False):
 
-		"""
+	"""
 
-		Parameters
-		----------
+	Parameters
+	----------
 
-		params: array
-			3x1 vector of paramters.
-		aifTime: array
-		   A n length array of times to samples AIF at
-		aifCoef: array
-		   A 7x1 array of coefficients for Feng Model AIF
-		pet: array
-			A m length array of pet data
-		petTime: array
-			A m x 2 array of PET start and end times
-		petSum: float
-			Sum of time activity curve. Used to normalize peanlty
-		cOne: array
-		   An m length array with concentration in compartment one
-		flow: float
-		   Flow in units 1/seconds.
-		vb: float
-			CBV in units mlB/mlT
-		pen: float
-	 	   The penalty for least squares optimization
-		penC: float
-		   Value at which penalty = 0
-		coefs: logical
-			If true, returns predictions and coefficients
+	params: array
+		3x1 vector of paramters.
+	aifTime: array
+	   A n length array of times to samples AIF at
+	aifCoef: array
+	   A 7x1 array of coefficients for Feng Model AIF
+	pet: array
+		A m length array of pet data
+	petTime: array
+		A m x 2 array of PET start and end times
+	petSum: float
+		Sum of time activity curve. Used to normalize peanlty
+	cOne: array
+	   An m length array with concentration in compartment one
+	flow: float
+	   Flow in units 1/seconds.
+	vb: float
+		CBV in units mlB/mlT
+	pen: float
+ 	   The penalty for least squares optimization
+	penC: float
+	   Value at which penalty = 0
+	coefs: logical
+		If true, returns predictions and coefficients
 
-		Returns
-		-------
-		If coefs = False
-			SSE: float
-				Sum of squares error with penalty
-		If coefs = True:
-			petPred: array
-				An m length array of PET predictions
-			coefs: array
-				A 4x1 array of coefficients
+	Returns
+	-------
+	If coefs = False
+		SSE: float
+			Sum of squares error with penalty
+	If coefs = True:
+		petPred: array
+			An m length array of PET predictions
+		coefs: array
+			A 4x1 array of coefficients
 
-		"""
+	"""
 
 	#Rename and scale parameters
 	b1 = params[0] * 0.015
@@ -1783,46 +1783,46 @@ def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,petSum,flow,vb,pen,penC,co
 
 def gluAifLstPen(params,aifTime,pAif,pet,petTime,petSum,cOne,flow,pen,penC,coefs=False):
 
-		"""
+	"""
 
-		Parameters
-		----------
+	Parameters
+	----------
 
-		params: array
-			2x1 vector of paramters.
-		aifTime: array
-		   A n length array of times to samples AIF at
-		pAif: array
-		   A n length array containing plasma arterial input function
-		pet: array
-			A m length array of pet data
-		petTime: array
-			A m x 2 array of PET start and end times
-		petSum: float
-			Sum of time activity curve. Used to normalize peanlty
-		cOne: array
-		   An m length array with concentration in compartment one
-		flow: float
-		   Flow in units 1/seconds.
-		pen: float
-	 	   The penalty for least squares optimization
-		penC: float
-		   Value at which penalty = 0
-		coefs: logical
-			If true, returns predictions and coefficients
+	params: array
+		2x1 vector of paramters.
+	aifTime: array
+	   A n length array of times to samples AIF at
+	pAif: array
+	   A n length array containing plasma arterial input function
+	pet: array
+		A m length array of pet data
+	petTime: array
+		A m x 2 array of PET start and end times
+	petSum: float
+		Sum of time activity curve. Used to normalize peanlty
+	cOne: array
+	   An m length array with concentration in compartment one
+	flow: float
+	   Flow in units 1/seconds.
+	pen: float
+ 	   The penalty for least squares optimization
+	penC: float
+	   Value at which penalty = 0
+	coefs: logical
+		If true, returns predictions and coefficients
 
-		Returns
-		-------
-		If coefs = False
-			SSE: float
-				Sum of squares error with penalty
-		If coefs = True:
-			petPred: array
-				An m length array of PET predictions
-			coefs: array
-				A 4x1 array of coefficients
+	Returns
+	-------
+	If coefs = False
+		SSE: float
+			Sum of squares error with penalty
+	If coefs = True:
+		petPred: array
+			An m length array of PET predictions
+		coefs: array
+			A 4x1 array of coefficients
 
-		"""
+	"""
 
 	#Scale beta parameters
 	b1 = params[0] * 0.015
@@ -2276,42 +2276,42 @@ def fdgAifLst(aifTime,pAif,pet,cOne):
 
 def fdgAifLstPen(param,aifTime,pAif,petTime,pet,cOne,pen,penC,coefs=False):
 
-		"""
+	"""
 
-		Parameters
-		----------
+	Parameters
+	----------
 
-		param: array
-			1x1 vector of paramters.
-		aifTime: array
-		   A n length array of times to samples AIF at
-		pAif: array
-		   A n length array containing plasma arterial input function
-		petTime: array
-			A m x 2 array of PET start and end times
-		pet: array
-		   A m length array of pet data
-		cOne: array
-		   An m length array with concentration in compartment one
-		pen: float
-	 	   The penalty for least squares optimization
-		penC: float
-		   Value at which penalty = 0
-		coefs: logical
-			If true, returns predictions and coefficients
+	param: array
+		1x1 vector of paramters.
+	aifTime: array
+	   A n length array of times to samples AIF at
+	pAif: array
+	   A n length array containing plasma arterial input function
+	petTime: array
+		A m x 2 array of PET start and end times
+	pet: array
+	   A m length array of pet data
+	cOne: array
+	   An m length array with concentration in compartment one
+	pen: float
+ 	   The penalty for least squares optimization
+	penC: float
+	   Value at which penalty = 0
+	coefs: logical
+		If true, returns predictions and coefficients
 
-		Returns
-		-------
-		If coefs = False
-			SSE: float
-				Sum of squares error with penalty
-		If coefs = True:
-			petPred: array
-				An m length array of PET predictions
-			coefs: array
-				A 3x1 array of coefficients
+	Returns
+	-------
+	If coefs = False
+		SSE: float
+			Sum of squares error with penalty
+	If coefs = True:
+		petPred: array
+			An m length array of PET predictions
+		coefs: array
+			A 3x1 array of coefficients
 
-		"""
+	"""
 
 	#Scale parameters
 	b1 = param[0] * 0.0038
