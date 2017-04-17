@@ -28,16 +28,19 @@ argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('dta',help='Dta file with drawn samples',nargs=1,type=str)
 argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
 argParse.add_argument('blood',help='Blood glucose concentration mg/dL',type=float)
+argParse.add_argument('roi',help='ROIs for two stage procedure',nargs=1,type=str)
 argParse.add_argument('cbf',help='CBF image. In mL/hg*min',nargs=1,type=str)
 argParse.add_argument('cbv',help='CBV image for blood volume correction in mL/hg',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
+argParse.add_argument('-pen',help='Penalty term for whole-brain estimates. Default is 3.0',nargs=1,type=float,default=[3.0])
+argParse.add_argument('-roiPen',help='Penalty term for ROI estimates. Default is 0.5',nargs=1,type=float,default=[3.0])
+argParse.add_argument('-voxPen',help='Penalty term for voxel estimates. Default is 2.5',nargs=1,type=float,default=[3.0])
 argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('-seg',help='Segmentation image used to create CBV averages.',nargs=1,type=str)
 argParse.add_argument('-fwhm',help='Apply smoothing kernel to CBF and CBV',nargs=1,type=float)
 argParse.add_argument('-fwhmSeg',help='Apply smoothing kerenl to CBV segmentation image',nargs=1,type=float)
-argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
-argParse.add_argument('-noDelay',action='store_const',const=1,help='Do not include AIF delay term in model.')
-argParse.add_argument('-fModel',action='store_const',const=1,help='Does delay estimate at each voxel.')
+argParse.add_argument('-noRoi',action='store_const',const=1,help='Do not perform region estimation. Implies -noVox')
+argParse.add_argument('-noVox',action='store_const',const=1,help='Do not perform voxel estimation')
 argParse.add_argument('-dT',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-dB',help='Density of blood in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-oBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 0.005*[lower,upper]. Defalt is [0.2,5]')
@@ -89,11 +92,12 @@ info = nagini.loadInfo(args.info[0])
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
+roi = nagini.loadHeader(args.roi[0])
 cbf = nagini.loadHeader(args.cbf[0])
 cbv = nagini.loadHeader(args.cbv[0])
 
 #Check to make sure dimensions match
-if pet.shape[3] != info.shape[0] or pet.shape[0:3] != cbf.shape[0:3] or pet.shape[0:3] != cbv.shape[0:3] :
+if pet.shape[3] != info.shape[0] or pet.shape[0:3] != roi.shape[0:3] or pet.shape[0:3] != cbf.shape[0:3] or pet.shape[0:3] != cbv.shape[0:3] :
 	print 'ERROR: Data dimensions do not match. Please check...'
 	sys.exit()
 
@@ -119,6 +123,7 @@ else:
 petData = pet.get_data()
 cbfData = cbf.get_data()
 cbvData = cbv.get_data()
+roiData = roi.get_data()
 
 #Segmentation logic
 if args.seg is not None:
@@ -145,16 +150,17 @@ if args.seg is not None:
 
 	#Smooth
 	if args.fwhmSeg is not None:
-			voxSize = pet.header.get_zooms()
-			sigmas = np.divide(args.fwhmSeg[0]/np.sqrt(8.0*np.log(2.0)),voxSize[0:3])
+			roiSize = pet.header.get_zooms()
+			sigmas = np.divide(args.fwhmSeg[0]/np.sqrt(8.0*np.log(2.0)),roiSize[0:3])
 			cbvData = filt.gaussian_filter(cbvData,sigmas).reshape(cbvData.shape)
 			cbvData[segData==0] = 0.0
 
 #Get mask where inputs are non_zero
-maskData = np.where(np.logical_and(np.logical_and(brainData!=0,cbfData!=0),cbvData!=0),1,0)
+maskData = np.where(np.logical_and(roiData!=0,np.logical_and(np.logical_and(brainData!=0,cbfData!=0),cbvData!=0)),1,0)
 
 #Flatten the PET images and then mask
 petMasked = nagini.reshape4d(petData)[maskData.flatten()>0,:]
+roiMasked = roiData[maskData>0].flatten()
 
 #Prep CBF and CBV data
 if args.fwhm is None:
@@ -163,8 +169,8 @@ if args.fwhm is None:
 	cbvMasked = cbvData[maskData>0].flatten()
 else:
 	#Prepare for smoothing
-	voxSize = pet.header.get_zooms()[0:3]
-	sigmas = np.divide(args.fwhm[0]/np.sqrt(8.0*np.log(2.0)),voxSize[0:3])
+	roiSize = pet.header.get_zooms()[0:3]
+	sigmas = np.divide(args.fwhm[0]/np.sqrt(8.0*np.log(2.0)),roiSize[0:3])
 
 	#Smooth and mask data
 	cbfMasked = filt.gaussian_filter(cbfData,sigmas)[maskData>0].flatten()
@@ -237,69 +243,31 @@ aifFit,aifCov =  opt.curve_fit(nagini.fengModel,drawTime,corrCounts,inits,bounds
 #Run global optimization
 aifGlobal = opt.basinhopping(nagini.fengModelGlobal,aifFit,minimizer_kwargs={'args':(drawTime,corrCounts),'bounds':np.array(bounds).T})
 
-#Get interpolation times as start to end of pet scan with aif sampling rate
+#Get interpolation times as start to end of pet scan with aif sampling rate
 sampTime = np.min(np.diff(drawTime))
 interpTime = np.arange(np.floor(startTime[0]),np.ceil(endTime[-1]+sampTime),sampTime)
 
 #Get whole-brain tac
 wbTac = np.mean(petMasked,axis=0)
+wbSum = np.sum(wbTac)
 
 ###################
 ###Model Fitting###
 ###################
 print ('Beginning fitting procedure...')
 
-#Setup the proper model function
-if args.noDelay == 1:
-
-	#Delete bounds and initlization for delay paratmer
-	del wbInit[-1]; del wbBounds[0][-1]; del wbBounds[1][-1]
-
-	#Interpolate Aif
-	wbAif = nagini.fengModel(interpTime,aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-	wbAifStart = nagini.fengModel(petTime[:,0],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-	wbAifEnd = nagini.fengModel(petTime[:,1],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-
-	#Get interpolated AIF integrated from start to end of pet times
-	wbAifPet = (wbAifStart + wbAifEnd) / 2.0
-
-	#Get concentration in compartment one
-	cOneWb = vbWb*wbAifPet
-
-	#Convert AIF to plasma
-	pAif = wbAif*(1.19 + -0.002*interpTime/60.0)
-
-	#Remove metabolites from plasma input function\
-	pAif *=  (1 - (4.983e-05*interpTime))
-
-	#No delay function
-	wbFunc = nagini.gluAifLst(interpTime,pAif,wbTac,cOneWb,flowWb)
-
-else:
-
-	#Model with delay
-	wbFunc = nagini.gluDelayLst(aifGlobal.x,interpTime,wbTac,flowWb,vbWb)
+#Arguments for whole-brain model fit
+wbArgs = (aifGlobal.x,interpTime,wbTac,petTime,wbSum,flowWb,vbWb,args.pen[0],1)
 
 #Attempt to fit model to whole-brain curve
-try:
-	wbOpt,wbCov = opt.curve_fit(wbFunc,petTime,wbTac,p0=wbInit,bounds=wbBounds)
-except(RuntimeError):
+wbFit = opt.minimize(nagini.gluDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
+if wbFit.success is False:
 	print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
 	sys.exit()
 
-#Calculate whole-brain correlation matrix
-sdMat = np.diag(np.sqrt(np.diag(wbCov)))
-sdMatI = np.linalg.inv(sdMat)
-wbCor = sdMatI.dot(wbCov).dot(sdMatI)
-
 #Get estimated coefficients and fit
-if args.noDelay == 1:
-	wbFitted,wbCoef = wbFunc(petTime,wbOpt[0],wbOpt[1],coefs=True)
-else:
-	wbFitted,wbCoef = wbFunc(petTime,wbOpt[0],wbOpt[1],wbOpt[2],coefs=True)
+wbOpt = wbFit.x
+wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifGlobal.x,interpTime,wbTac,petTime,wbSum,flowWb,vbWb,args.pen[0],1,coefs=True)
 
 #Calculate rate constants from my alphas and betas
 kOneWb = wbCoef[0] + (wbCoef[1]/(wbCoef[2]-wbCoef[3])) - ((wbCoef[1]*wbCoef[3])/((wbCoef[3]-wbCoef[2])*(flowWb-wbCoef[2])))
@@ -327,16 +295,15 @@ wbDv =  kOneWb/(wbCoef[2]*args.dT)
 wbConc = wbDv * args.blood * 0.05550748
 
 #Create string for whole-brain parameter estimates
-labels = ['gef','kOne','kTwo','kThree','kFour','cmrGlu','alphaOne','alphaTwo','betaOne','betaTwo','netEx','infux','DV','conc','condition']
-values = [gefWb,kOneWb*60,kTwoWb*60,kThreeWb*60,kFourWb*60,wbCmr,wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],wbNet,wbIn,wbDv,wbConc,np.linalg.cond(wbCov)]
-units = ['fraction','mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min','1/sec','1/sec','1/sec','1/sec','fraction','uMol/g/min','mLBlood/mLTissue','uMol/g','unitless']
+labels = ['gef','kOne','kTwo','kThree','kFour','cmrGlu','alphaOne','alphaTwo','betaOne','betaTwo','netEx','infux','DV','conc']
+values = [gefWb,kOneWb*60,kTwoWb*60,kThreeWb*60,kFourWb*60,wbCmr,wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],wbNet,wbIn,wbDv,wbConc]
+units = ['fraction','mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min','1/sec','1/sec','1/sec','1/sec','fraction','uMol/g/min','mLBlood/mLTissue','uMol/g']
 wbString = ''
 for pIdx in range(len(labels)):
 	wbString += '%s = %f (%s)\n'%(labels[pIdx],values[pIdx],units[pIdx])
 
 #Add in delay estimate
-if args.noDelay is None:
-	wbString += 'delay = %f (min)\n'%(wbOpt[2]/60.0)
+wbString += 'delay = %f (min)\n'%(wbOpt[2]/60.0)
 
 #Write out whole-brain results
 try:
@@ -344,13 +311,6 @@ try:
 	wbOut = open('%s_wbVals.txt'%(args.out[0]), "w")
 	wbOut.write(wbString)
 	wbOut.close()
-
-	#Write out covariance matrix
-	np.savetxt('%s_wbCov.txt'%(args.out[0]),wbCov)
-
-	#Write out correlation matrix
-	np.savetxt('%s_wbCor.txt'%(args.out[0]),wbCor)
-
 except(IOError):
 	print 'ERROR: Cannot write in output directory. Exiting...'
 	sys.exit()
@@ -379,16 +339,13 @@ try:
 	axTwo.set_ylabel('Counts')
 	axTwo.set_title('Arterial Sampled Input function')
 
-	#Show corrected input funciton as well
-	if args.noDelay != 1:
+	#Interpolate input function and correct for delay
+	cAif = nagini.fengModel(drawTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
+							aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
+	cAif *= np.exp(np.log(2)/1220.04*wbOpt[2])
 
-		#Interpolate input function and correct for delay
-		cAif = nagini.fengModel(drawTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-		cAif *= np.exp(np.log(2)/1220.04*wbOpt[2])
-
-		#Add shifted plot
-		axTwo.plot(drawTime,cAif,linewidth=5,c='green',label='Delay Corrected')
+	#Add shifted plot
+	axTwo.plot(drawTime,cAif,linewidth=5,c='green',label='Delay Corrected')
 
 	#Make sure we have legend for input function plot
 	axTwo.legend(loc='upper right')
@@ -403,143 +360,247 @@ try:
 except(RuntimeError,IOError):
 	print 'ERROR: Could not save figure. Moving on...'
 
-#Don't do voxelwise estimation if user says not to
-if args.wbOnly == 1:
+#Don't do region/roiel estimation if user says not to
+if args.noRoi == 1:
 	nagini.writeArgs(args,args.out[0])
 	sys.exit()
 
-#Get number of parameters for voxelwise optimizations
-if args.fModel == 1 or args.noDelay == 1:
-	nParam = wbOpt.shape[0]
-else:
-	nParam = wbOpt.shape[0]-1
-voxInit = np.copy(wbOpt[0:nParam])
+#Get number of parameters for roi/voxel optmization
+nParam = wbOpt.shape[0]-1
+roiInit = np.copy(wbOpt[0:nParam])
 
-#Set default voxelwise bounds
-lBounds = []; hBounds = []; bScale = [2.5,3]
+#Set default region bounds
+lBounds = []; hBounds = []; bScale = [3,3]
 for pIdx in range(nParam):
 	if wbOpt[pIdx] > 0:
-		lBounds.append(np.max([wbOpt[pIdx]/bScale[pIdx],wbBounds[0][pIdx]]))
-		hBounds.append(np.min([wbOpt[pIdx]*bScale[pIdx],wbBounds[1][pIdx]]))
+		lBounds.append(wbOpt[pIdx]/bScale[pIdx])
+		hBounds.append(wbOpt[pIdx]*bScale[pIdx])
 	elif wbOpt[pIdx] < 0:
-		lBounds.append(np.max([wbOpt[pIdx]*bScale[pIdx],wbBounds[0][pIdx]]))
-		hBounds.append(np.min([wbOpt[pIdx]/bScale[pIdx],wbBounds[1][pIdx]]))
+		lBounds.append(wbOpt[pIdx]*bScale[pIdx])
+		hBounds.append(wbOpt[pIdx]/bScale[pIdx])
 	else:
 		lBounds.append(wbBounds[0][pIdx])
 		hBounds.append(wbBounds[1][pIdx])
-voxBounds = np.array([lBounds,hBounds],dtype=np.float)
+roiBounds = np.array([lBounds,hBounds],dtype=np.float).T
 
-#Setup for voxelwise-optimization
-nVox = petMasked.shape[0]
-fitParams = np.zeros((nVox,nParam+13))
+#Setup for roi optmization
+uRoi = np.unique(roiMasked)
+nRoi = uRoi.shape[0]
+roiParams = np.zeros((nRoi,nParam+13))
+if args.noVox != 1:
+	voxParams = np.zeros((roiMasked.shape[0],nParam+13))
 
-#If fModel and noDelay is not set, we need to process the AIF
-if args.fModel != 1 and args.noDelay != 1:
-
-	#Interpolate input function using delay
-	wbAif = nagini.fengModel(interpTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
+#Interpolate input function using delay
+wbAif = nagini.fengModel(interpTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
+						 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+wbAifStart = nagini.fengModel(petTime[:,0]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
+							  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+wbAifEnd =  nagini.fengModel(petTime[:,1]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
 							 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
-	wbAifStart = nagini.fengModel(petTime[:,0]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-							 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
-	wbAifEnd =  nagini.fengModel(petTime[:,1]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-							 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
 
-	#Get interpolated AIF integrated from start to end of pet times
-	wbAifPet = (wbAifStart+wbAifEnd)/2.0
+#Get interpolated AIF integrated from start to end of pet times
+wbAifPet = (wbAifStart+wbAifEnd)/2.0
 
-	#Convert AIF to plasma
-	pAif = wbAif*(1.19 + -0.002*interpTime/60.0)
+#Convert AIF to plasma
+pAif = wbAif*(1.19 + -0.002*interpTime/60.0)
 
-	#Remove metabolites from plasma input function\
-	pAif *=  (1 - (4.983e-05*interpTime))
+#Remove metabolites from plasma input function
+pAif *=  (1 - (4.983e-05*interpTime))
 
-#Loop through every voxel
-noC = 0
-for voxIdx in tqdm(range(nVox)):
+#Loop through every region
+roiC = 0; voxC = 0
+for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
-	#Get voxel tac
-	voxTac = petMasked[voxIdx,:]
+	#Get regional pet data
+	roiMask = roiMasked==uRoi[roiIdx]
+	roiVoxels = petMasked[roiMask,:]
+	roiTac = np.mean(roiVoxels,axis=0)
+	roiSum = np.sum(roiTac)
 
-	#Decide which function
-	if args.fModel == 1 and args.noDelay !=1:
-		#Full model function
-		voxFunc = nagini.gluDelayLst(aifGlobal.x,interpTime,voxTac,flowMasked[voxIdx],vbMasked[voxIdx])
-	else:
-		#Get concentration in compartment one
-		cOneVox = vbMasked[voxIdx]*wbAifPet
+	#Get regional flow and vb
+	roiVb = vbMasked[roiMasked]
+	roiFlow = flowMasked[roiMasked]
+	roiVbMean = np.mean(roiVb)
+	roiFlowMean = np.mean(flowMasked[roiMasked])
 
-		#No delay function
-		voxFunc = nagini.gluAifLst(interpTime,pAif,voxTac,cOneVox,flowMasked[voxIdx])
+	#Get concentration in compartment one
+	cOneRoi = roiVbMean*wbAifPet
 
 	try:
 		#Run fit
-		voxOpt,voxCov = opt.curve_fit(voxFunc,petTime,voxTac,p0=voxInit,bounds=voxBounds)
+		roiArgs = (interpTime,pAif,roiTac,petTime,roiSum,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0])
+		roiOpt = opt.minimize(nagini.gluAifLstPen,roiInit,args=roiArgs,method='L-BFGS-B',bounds=roiBounds,options={'maxls':100})
 
 		#Extract coefficients
-		if voxOpt.shape[0] > 2:
-			voxFitted,voxCoef = voxFunc(petTime,voxOpt[0],voxOpt[1],voxOpt[2],coefs=True)
-		else:
-			voxFitted,voxCoef = voxFunc(petTime,voxOpt[0],voxOpt[1],coefs=True)
+		roiFitted,roiCoef = nagini.gluAifLstPen(roiOpt.x,interpTime,pAif,roiTac,petTime,roiSum,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0],coefs=True)
 
 		#Calculate rate constants from my alphas and betas
-		kOneVox = voxCoef[0] + (voxCoef[1]/(voxCoef[2]-voxCoef[3])) - ((voxCoef[1]*voxCoef[3])/((voxCoef[3]-voxCoef[2])*(flowMasked[voxIdx]-voxCoef[2])))
-		kThreeVox = voxCoef[1]/kOneVox
-		kTwoVox = voxCoef[2]-kThreeVox
-		kFourVox = voxCoef[3]
+		kOneRoi = roiCoef[0] + (roiCoef[1]/(roiCoef[2]-roiCoef[3])) - ((roiCoef[1]*roiCoef[3])/((roiCoef[3]-roiCoef[2])*(roiFlowMean-roiCoef[2])))
+		kThreeRoi = roiCoef[1]/kOneRoi
+		kTwoRoi = roiCoef[2]-kThreeRoi
+		kFourRoi = roiCoef[3]
 
 		#Calculate gef
-		gefVox = kOneVox / (flowMasked[voxIdx]*vbMasked[voxIdx])
+		gefRoi = kOneRoi / (roiFlowMean*roiVbMean)
 
 		#Calculate metabolic rate
-		cmrVox = (kOneVox*kThreeVox*args.blood)/(kTwoVox+kThreeVox) * gluScale
+		cmrRoi = (kOneRoi*kThreeRoi*args.blood)/(kTwoRoi+kThreeRoi) * gluScale
 
 		#Calculate net extraction
-		voxNet = voxCoef[1]/(voxCoef[2]*flowMasked[voxIdx]*vbMasked[voxIdx])
+		roiNet = roiCoef[1]/(roiCoef[2]*roiFlowMean*roiVbMean)
 
 		#Calculate influx
-		voxIn = kOneVox*args.blood*gluScale/100.0
+		roiIn = kOneRoi*args.blood*gluScale/100.0
 
 		#Calculate distrubtion volume
-		voxDv =  kOneVox/(voxCoef[2]*args.dT)
+		roiDv =  kOneRoi/(roiCoef[2]*args.dT)
 
 		#Compute tissue concentration
-		voxConc = voxDv * args.blood * 0.05550748
+		roiConc = roiDv * args.blood * 0.05550748
 
 		#Save common estimates
-		fitParams[voxIdx,0] = gefVox
-		fitParams[voxIdx,1] = kOneVox*60.0
-		fitParams[voxIdx,2] = kTwoVox*60.0
-		fitParams[voxIdx,3] = kThreeVox*60.0
-		fitParams[voxIdx,4] = kFourVox*60.0
-		fitParams[voxIdx,5] = cmrVox
-		fitParams[voxIdx,6] = voxCoef[0]
-		fitParams[voxIdx,7] = voxCoef[1]
-		fitParams[voxIdx,8] = voxCoef[2]
-		fitParams[voxIdx,9] = voxCoef[3]
-		fitParams[voxIdx,10] = voxNet
-		fitParams[voxIdx,11] = voxIn
-		fitParams[voxIdx,12] = voxDv
-		fitParams[voxIdx,13] = voxConc
+		roiParams[roiIdx,0] = gefRoi
+		roiParams[roiIdx,1] = kOneRoi*60.0
+		roiParams[roiIdx,2] = kTwoRoi*60.0
+		roiParams[roiIdx,3] = kThreeRoi*60.0
+		roiParams[roiIdx,4] = kFourRoi*60.0
+		roiParams[roiIdx,5] = cmrRoi
+		roiParams[roiIdx,6] = roiCoef[0]
+		roiParams[roiIdx,7] = roiCoef[1]
+		roiParams[roiIdx,8] = roiCoef[2]
+		roiParams[roiIdx,9] = roiCoef[3]
+		roiParams[roiIdx,10] = roiNet
+		roiParams[roiIdx,11] = roiIn
+		roiParams[roiIdx,12] = roiDv
+		roiParams[roiIdx,13] = roiConc
 
-		#Save delay parameter if necessary
-		if nParam > 2:
-			fitParams[voxIdx,14] = voxOpt[2]/60.0
-
-		#Calculate residual with delay
-		fitResid = voxTac - voxFitted
+		#Calculate residual
+		roiResid = roiTac - roiFitted
 
 		#Calculate normalized root mean square deviation
-		fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0]) / np.mean(voxTac)
+		roiRmsd = np.sqrt(np.sum(np.power(roiResid,2))/roiTac.shape[0]) / np.mean(roiTac)
 
 		#Save residual
-		fitParams[voxIdx,-1] = fitRmsd
+		roiParams[roiIdx,-1] = roiRmsd
 
 	except(RuntimeError,ValueError):
-		noC += 1
+		regC += 1
+
+	#Don't go on if user doesn't want voxel results
+	if args.noVox == 1:
+		continue
+
+	#Create data structure for voxels within roiOpt
+	nVox = roiVoxels.shape[0]
+	roiVoxParams = np.zeros((nVox,nParam+13))
+
+	#If region optimization was a success use it for voxel
+	if roiOpt.success is True:
+		voxInit = np.copy(roiOpt.x)
+	else:
+		voxInit = np.copy(wbOpt)
+		regC += 1
+
+	#Set bounds for voxel
+	lBounds = []; hBounds = []; bScale = [2,2]
+	for pIdx in range(nParam):
+		if wbOpt[pIdx] > 0:
+			lBounds.append(voxInit[pIdx]/bScale[pIdx])
+			hBounds.append(voxInit[pIdx]*bScale[pIdx])
+		elif wbOpt[pIdx] < 0:
+			lBounds.append(voxInit[pIdx]*bScale[pIdx])
+			hBounds.append(voxInit[pIdx]/bScale[pIdx])
+		else:
+			lBounds.append(roiOpt.x[0][pIdx])
+			hBounds.append(roiOpt.x[1][pIdx])
+	voxBounds = np.array([lBounds,hBounds],dtype=np.float).T
+
+	#Now loop through voxels
+	for voxIdx in tqdm(range(nVox),desc='Voxels within region %i'%(roiIdx),leave=False):
+
+		#Get voxel data
+		voxTac = roiVoxels[voxIdx,:]
+		voxSum = np.sum(voxTac)
+		voxVb = roiVb[voxIdx]
+		voxFlow = roiFlow[voxIdx]
+
+		#Calculate concentration in compartment one
+		cOneVox = voxVb*wbAifPet
+
+		try:
+			#Run fit
+			voxArgs = (interpTime,pAif,voxTac,petTime,voxSum,cOneVox,voxFlow,args.voxPen[0],voxInit[0])
+			voxOpt = opt.minimize(nagini.gluAifLstPen,voxInit,args=voxArgs,method='L-BFGS-B',bounds=voxBounds,options={'maxls':100})
+
+			#Extract coefficients
+			voxFitted,voxCoef = nagini.gluAifLstPen(voxOpt.x,interpTime,pAif,voxTac,petTime,voxSum,cOneVox,voxFlow,args.voxPen[0],voxInit[0],coefs=True)
+
+			#Calculate rate constants from my alphas and betas
+			kOneVox = voxCoef[0] + (voxCoef[1]/(voxCoef[2]-voxCoef[3])) - ((voxCoef[1]*voxCoef[3])/((voxCoef[3]-voxCoef[2])*(voxFlow-voxCoef[2])))
+			kThreeVox = voxCoef[1]/kOneVox
+			kTwoVox = voxCoef[2]-kThreeVox
+			kFourVox = voxCoef[3]
+
+			#Calculate gef
+			gefVox = kOneVox / (voxFlow*voxVb)
+
+			#Calculate metabolic rate
+			cmrVox = (kOneVox*kThreeVox*args.blood)/(kTwoVox+kThreeVox) * gluScale
+
+			#Calculate net extraction
+			voxNet = voxCoef[1]/(voxCoef[2]*voxFlow*voxVb)
+
+			#Calculate influx
+			voxIn = kOneVox*args.blood*gluScale/100.0
+
+			#Calculate distrubtion volume
+			voxDv =  kOneVox/(voxCoef[2]*args.dT)
+
+			#Compute tissue concentration
+			voxConc = voxDv * args.blood * 0.05550748
+
+			#Save common estimates
+			roiVoxParams[voxIdx,0] = gefVox
+			roiVoxParams[voxIdx,1] = kOneVox*60.0
+			roiVoxParams[voxIdx,2] = kTwoVox*60.0
+			roiVoxParams[voxIdx,3] = kThreeVox*60.0
+			roiVoxParams[voxIdx,4] = kFourVox*60.0
+			roiVoxParams[voxIdx,5] = cmrVox
+			roiVoxParams[voxIdx,6] = voxCoef[0]
+			roiVoxParams[voxIdx,7] = voxCoef[1]
+			roiVoxParams[voxIdx,8] = voxCoef[2]
+			roiVoxParams[voxIdx,9] = voxCoef[3]
+			roiVoxParams[voxIdx,10] = voxNet
+			roiVoxParams[voxIdx,11] = voxIn
+			roiVoxParams[voxIdx,12] = voxDv
+			roiVoxParams[voxIdx,13] = voxConc
+
+			#Calculate residual
+			voxResid = voxTac - voxFitted
+
+			#Calculate normalized root mean square deviation
+			voxRmsd = np.sqrt(np.sum(np.power(voxResid,2))/voxTac.shape[0]) / np.mean(voxTac)
+
+			#Save residual
+			roiVoxParams[voxIdx,-1] = voxRmsd
+
+		except(RuntimeError,ValueError):
+			voxC += 1
+
+		#Check to see if we converged
+		if voxOpt.success is False:
+			voxC += 1
+
+		#Save results from voxel loop
+		voxParams[roiMask,:] = roiVoxParams
+
 
 #Warn user about lack of convergence
-if noC > 0:
-	print('Warning: %i of %i voxels did not converge.'%(noC,nVox))
+if roiC > 0:
+	print 'Warning: %i of %i regions did not converge.'%(roiC,roiParams.shape[0])
+if voxC > 0:
+	print 'Warning: %i of %i voxels did not converge.'%(voxC,voxParams.shape[0])
+
 
 #############
 ###Output!###
@@ -547,10 +608,22 @@ if noC > 0:
 print('Writing out results...')
 
 #Set names for model images
-paramNames = ['gef','kOne','kTwo','kThree','kFour','cmrGlu','alphaOne','alphaTwo','betaOne','betaTwo','netEx','influx','DV','conc','delay','nRmsd']
+paramNames = ['gef','kOne','kTwo','kThree','kFour','cmrGlu','alphaOne','alphaTwo','betaOne','betaTwo','netEx','influx','DV','conc','nRmsd']
 
-#Do the writing. For now, doesn't write variance images.
-for iIdx in range(fitParams.shape[1]-1):
-	nagini.writeMaskedImage(fitParams[:,iIdx],maskData.shape,maskData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[iIdx]))
-nagini.writeMaskedImage(fitParams[:,-1],maskData.shape,maskData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[-1]))
+#Do the writing for parameters
+for iIdx in range(roiParams.shape[1]-1):
+
+	#Write out regional data
+	nib.Nifti1Image(roiParams[:,iIdx],affine=np.identity(4)).to_filename('%s_roiAvg_%s.nii.gz'%(args.out[0],paramNames[iIdx]))
+
+	#Write out voxelwise data
+	if args.noVox != 1:
+		nagini.writeMaskedImage(voxParams[:,iIdx],maskData.shape,maskData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[iIdx]))
+
+#Write out root mean square images
+nib.Nifti1Image(roiParams[:,-1],affine=np.identity(4)).to_filename('%s_%s.nii.gz'%(args.out[0],paramNames[-1]))
+if args.noVox != 1:
+	nagini.writeMaskedImage(voxParams[:,-1],maskData.shape,maskData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[-1]))
+
+#Write out chosen arguments
 nagini.writeArgs(args,args.out[0])
