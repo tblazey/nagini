@@ -418,10 +418,10 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 	roiSum = np.sum(roiTac)
 
 	#Get regional flow and vb
-	roiVb = vbMasked[roiMasked]
-	roiFlow = flowMasked[roiMasked]
+	roiVb = vbMasked[roiMask]
+	roiFlow = flowMasked[roiMask]
 	roiVbMean = np.mean(roiVb)
-	roiFlowMean = np.mean(flowMasked[roiMasked])
+	roiFlowMean = np.mean(roiFlow)
 
 	#Get concentration in compartment one
 	cOneRoi = roiVbMean*wbAifPet
@@ -594,14 +594,6 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 		#Save results from voxel loop
 		voxParams[roiMask,:] = roiVoxParams
 
-
-#Warn user about lack of convergence
-if roiC > 0:
-	print 'Warning: %i of %i regions did not converge.'%(roiC,roiParams.shape[0])
-if voxC > 0:
-	print 'Warning: %i of %i voxels did not converge.'%(voxC,voxParams.shape[0])
-
-
 #############
 ###Output!###
 #############
@@ -627,3 +619,21 @@ if args.noVox != 1:
 
 #Write out chosen arguments
 nagini.writeArgs(args,args.out[0])
+
+#Convergence output
+try:
+	#Open file
+	cOut = open('%s_convergence.txt'%(args.out[0]), "w")
+
+	#Write out ROI data
+	cOut.write('%i of %i'%(roiC,nRoi))
+
+	#Write out voxel data if necessary
+	if args.noVox !=1:
+		cOut.wirite('%i of %i'%(voxC,voxParams.shape[0]),"w")
+
+	cOut.close()
+except(IOError):
+	print 'ERROR: Cannot write in output directory. Exiting...'
+	sys.exit()
+
