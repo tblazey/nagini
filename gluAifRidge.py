@@ -33,14 +33,15 @@ argParse.add_argument('cbf',help='CBF image. In mL/hg*min',nargs=1,type=str)
 argParse.add_argument('cbv',help='CBV image for blood volume correction in mL/hg',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
 argParse.add_argument('-pen',help='Penalty term for whole-brain estimates. Default is 3.0',nargs=1,type=float,default=[3.0])
-argParse.add_argument('-roiPen',help='Penalty term for ROI estimates. Default is 3.0',nargs=1,type=float,default=[3.0])
-argParse.add_argument('-voxPen',help='Penalty term for voxel estimates. Default is 3.0',nargs=1,type=float,default=[3.0])
+argParse.add_argument('-roiPen',help='Penalty term for ROI estimates. Default is 2.5',nargs=1,type=float,default=[2.5])
+argParse.add_argument('-voxPen',help='Penalty term for voxel estimates. Default is 15.0',nargs=1,type=float,default=[15.0])
 argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('-seg',help='Segmentation image used to create CBV averages.',nargs=1,type=str)
 argParse.add_argument('-fwhm',help='Apply smoothing kernel to CBF and CBV',nargs=1,type=float)
 argParse.add_argument('-fwhmSeg',help='Apply smoothing kerenl to CBV segmentation image',nargs=1,type=float)
 argParse.add_argument('-noRoi',action='store_const',const=1,help='Do not perform region estimation. Implies -noVox')
 argParse.add_argument('-noVox',action='store_const',const=1,help='Do not perform voxel estimation')
+argParse.add_argument('-noFill',action='store_const',const=1,help='Do not replace nans with 6-neighbor average')
 argParse.add_argument('-dT',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-dB',help='Density of blood in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-oBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 0.005*[lower,upper]. Defalt is [0.2,5]')
@@ -73,7 +74,7 @@ for bIdx in range(len(uBounds)):
 #Load needed libraries
 import numpy as np, nibabel as nib, nagini, sys, scipy.optimize as opt
 import scipy.interpolate as interp, matplotlib.pyplot as plt, matplotlib.gridspec as grid
-import scipy.ndimage.filters as filt
+import scipy.ndimage.filters as filt, scipy.spatial as spat
 from tqdm import tqdm
 
 #Ignore invalid  and overflow warnings
@@ -269,35 +270,16 @@ if wbFit.success is False:
 wbOpt = wbFit.x
 wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifGlobal.x,interpTime,wbTac,petTime,wbSum,flowWb,vbWb,args.pen[0],1,coefs=True)
 
-#Calculate rate constants from my alphas and betas
-kOneWb = wbCoef[0] + (wbCoef[1]/(wbCoef[2]-wbCoef[3])) - ((wbCoef[1]*wbCoef[3])/((wbCoef[3]-wbCoef[2])*(flowWb-wbCoef[2])))
-kThreeWb = wbCoef[1]/kOneWb
-kTwoWb = wbCoef[2]-kThreeWb
-kFourWb = wbCoef[3]
-
-#Calculate gef
-gefWb = kOneWb / (flowWb*vbWb)
-
-#Calculate metabolic rate
-gluScale = 333.0449 / args.dT
-wbCmr = (kOneWb*kThreeWb*args.blood)/(kTwoWb+kThreeWb) * gluScale
-
-#Calculate net extraction
-wbNet = wbCoef[1]/(wbCoef[2]*flowWb*vbWb)
-
-#Calculate influx
-wbIn = kOneWb*args.blood*gluScale/100.0
-
-#Calculate distrubtion volume
-wbDv =  kOneWb/(wbCoef[2]*args.dT)
-
-#Compute tissue concentration
-wbConc = wbDv * args.blood * 0.05550748
+#Use coefficents to calculate all my parameters
+wbParams = nagini.gluCalc(wbCoef,flowWb,vbWb,args.blood,args.dT)
 
 #Create string for whole-brain parameter estimates
-labels = ['gef','kOne','kTwo','kThree','kFour','cmrGlu','alphaOne','alphaTwo','betaOne','betaTwo','netEx','infux','DV','conc']
-values = [gefWb,kOneWb*60,kTwoWb*60,kThreeWb*60,kFourWb*60,wbCmr,wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],wbNet,wbIn,wbDv,wbConc]
-units = ['fraction','mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min','1/sec','1/sec','1/sec','1/sec','fraction','uMol/g/min','mLBlood/mLTissue','uMol/g']
+labels = ['gef','kOne','kTwo','kThree','kFour','cmrGlu',
+          'alphaOne','alphaTwo','betaOne','betaTwo','netEx','infux','DV','conc']
+values = [wbParams[0],wbParams[1],wbParams[2],wbParams[3],wbParams[4],wbParams[5],
+          wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],wbParams[6],wbParams[7],wbParams[8],wbParams[9]]
+units = ['fraction','mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min',
+         '1/sec','1/sec','1/sec','1/sec','fraction','uMol/g/min','mLBlood/mLTissue','uMol/g']
 wbString = ''
 for pIdx in range(len(labels)):
 	wbString += '%s = %f (%s)\n'%(labels[pIdx],values[pIdx],units[pIdx])
@@ -388,7 +370,7 @@ uRoi = np.unique(roiMasked)
 nRoi = uRoi.shape[0]
 roiParams = np.zeros((nRoi,nParam+13))
 if args.noVox != 1:
-	voxParams = np.zeros((roiMasked.shape[0],nParam+13))
+	voxParams = np.zeros((roiMasked.shape[0],nParam+13)); voxParams[:] = np.nan
 
 #Interpolate input function using delay
 wbAif = nagini.fengModel(interpTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
@@ -434,45 +416,12 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 		#Extract coefficients
 		roiFitted,roiCoef = nagini.gluAifLstPen(roiOpt.x,interpTime,pAif,roiTac,petTime,roiSum,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0],coefs=True)
 
-		#Calculate rate constants from my alphas and betas
-		kOneRoi = roiCoef[0] + (roiCoef[1]/(roiCoef[2]-roiCoef[3])) - ((roiCoef[1]*roiCoef[3])/((roiCoef[3]-roiCoef[2])*(roiFlowMean-roiCoef[2])))
-		kThreeRoi = roiCoef[1]/kOneRoi
-		kTwoRoi = roiCoef[2]-kThreeRoi
-		kFourRoi = roiCoef[3]
-
-		#Calculate gef
-		gefRoi = kOneRoi / (roiFlowMean*roiVbMean)
-
-		#Calculate metabolic rate
-		cmrRoi = (kOneRoi*kThreeRoi*args.blood)/(kTwoRoi+kThreeRoi) * gluScale
-
-		#Calculate net extraction
-		roiNet = roiCoef[1]/(roiCoef[2]*roiFlowMean*roiVbMean)
-
-		#Calculate influx
-		roiIn = kOneRoi*args.blood*gluScale/100.0
-
-		#Calculate distrubtion volume
-		roiDv =  kOneRoi/(roiCoef[2]*args.dT)
-
-		#Compute tissue concentration
-		roiConc = roiDv * args.blood * 0.05550748
+		#Caculate roi paramter values
+		roiVals = nagini.gluCalc(roiCoef,roiFlowMean,roiVbMean,args.blood,args.dT)
 
 		#Save common estimates
-		roiParams[roiIdx,0] = gefRoi
-		roiParams[roiIdx,1] = kOneRoi*60.0
-		roiParams[roiIdx,2] = kTwoRoi*60.0
-		roiParams[roiIdx,3] = kThreeRoi*60.0
-		roiParams[roiIdx,4] = kFourRoi*60.0
-		roiParams[roiIdx,5] = cmrRoi
-		roiParams[roiIdx,6] = roiCoef[0]
-		roiParams[roiIdx,7] = roiCoef[1]
-		roiParams[roiIdx,8] = roiCoef[2]
-		roiParams[roiIdx,9] = roiCoef[3]
-		roiParams[roiIdx,10] = roiNet
-		roiParams[roiIdx,11] = roiIn
-		roiParams[roiIdx,12] = roiDv
-		roiParams[roiIdx,13] = roiConc
+		roiParams[roiIdx,0:4] = roiCoef
+		roiParams[roiIdx,4:14] = roiVals
 
 		#Calculate residual
 		roiResid = roiTac - roiFitted
@@ -484,7 +433,7 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 		roiParams[roiIdx,-1] = roiRmsd
 
 	except(RuntimeError,ValueError):
-		regC += 1
+		roiC += 1
 
 	#Don't go on if user doesn't want voxel results
 	if args.noVox == 1:
@@ -499,7 +448,7 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 		voxInit = np.copy(roiOpt.x)
 	else:
 		voxInit = np.copy(wbOpt)
-		regC += 1
+		roiC += 1
 
 	#Set bounds for voxel
 	lBounds = []; hBounds = []; bScale = [2,2]
@@ -535,45 +484,12 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 			#Extract coefficients
 			voxFitted,voxCoef = nagini.gluAifLstPen(voxOpt.x,interpTime,pAif,voxTac,petTime,voxSum,cOneVox,voxFlow,args.voxPen[0],voxInit[0],coefs=True)
 
-			#Calculate rate constants from my alphas and betas
-			kOneVox = voxCoef[0] + (voxCoef[1]/(voxCoef[2]-voxCoef[3])) - ((voxCoef[1]*voxCoef[3])/((voxCoef[3]-voxCoef[2])*(voxFlow-voxCoef[2])))
-			kThreeVox = voxCoef[1]/kOneVox
-			kTwoVox = voxCoef[2]-kThreeVox
-			kFourVox = voxCoef[3]
+			#Caculate voxel parameters
+			voxVals = nagini.gluCalc(voxCoef,voxFlow,voxVb,args.blood,args.dT)
 
-			#Calculate gef
-			gefVox = kOneVox / (voxFlow*voxVb)
-
-			#Calculate metabolic rate
-			cmrVox = (kOneVox*kThreeVox*args.blood)/(kTwoVox+kThreeVox) * gluScale
-
-			#Calculate net extraction
-			voxNet = voxCoef[1]/(voxCoef[2]*voxFlow*voxVb)
-
-			#Calculate influx
-			voxIn = kOneVox*args.blood*gluScale/100.0
-
-			#Calculate distrubtion volume
-			voxDv =  kOneVox/(voxCoef[2]*args.dT)
-
-			#Compute tissue concentration
-			voxConc = voxDv * args.blood * 0.05550748
-
-			#Save common estimates
-			roiVoxParams[voxIdx,0] = gefVox
-			roiVoxParams[voxIdx,1] = kOneVox*60.0
-			roiVoxParams[voxIdx,2] = kTwoVox*60.0
-			roiVoxParams[voxIdx,3] = kThreeVox*60.0
-			roiVoxParams[voxIdx,4] = kFourVox*60.0
-			roiVoxParams[voxIdx,5] = cmrVox
-			roiVoxParams[voxIdx,6] = voxCoef[0]
-			roiVoxParams[voxIdx,7] = voxCoef[1]
-			roiVoxParams[voxIdx,8] = voxCoef[2]
-			roiVoxParams[voxIdx,9] = voxCoef[3]
-			roiVoxParams[voxIdx,10] = voxNet
-			roiVoxParams[voxIdx,11] = voxIn
-			roiVoxParams[voxIdx,12] = voxDv
-			roiVoxParams[voxIdx,13] = voxConc
+			#Save coefficinets
+			roiVoxParams[voxIdx,0:4] = voxCoef
+			roiVoxParams[voxIdx,4:14] = voxVals
 
 			#Calculate residual
 			voxResid = voxTac - voxFitted
@@ -594,13 +510,81 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 		#Save results from voxel loop
 		voxParams[roiMask,:] = roiVoxParams
 
+#Prepare for voxelwise writing
+if args.noVox !=1:
+
+	#Put voxelwise parameters back into image space
+	voxData = np.zeros((maskData.shape[0],maskData.shape[1],maskData.shape[2],voxParams.shape[1]))
+	voxData[maskData>0,:] = voxParams
+
+	#Fill nan logic
+	if args.noFill != 1 and voxC > 0:
+
+		#Loop through parameters that we need to replace the nans
+		for cIdx in range(0,4):
+
+			#Extract coefficinet data
+			cData = voxData[:,:,:,cIdx]
+
+			#Setup for getting nearest neighbors
+			if cIdx == 0:
+
+				#Get coordinates for nans
+				nanBool = np.isnan(cData); nNan = np.sum(nanBool)
+				cNanIdx = np.array(np.where(nanBool)).T
+
+				#Get coordinates for useable data
+				cUseIdx = np.array(np.where(np.logical_and(cData!=0.0,np.logical_not(nanBool)))).T
+
+				#Make tree for finding nearest neighbours
+				tree = spat.KDTree(cUseIdx)
+
+				#Get 6 nearest neighbors for each nan
+				nanD,nanNe = tree.query(cNanIdx,6)
+
+				#Convert neighbors to image coordinates
+				interpIdx = cUseIdx[nanNe]
+
+			#Loop through nans
+			for nIdx in range(nNan):
+
+				#Get values for neighbors
+				neVal = cData[interpIdx[nIdx,:,0],interpIdx[nIdx,:,1],interpIdx[nIdx,:,2]]
+
+				#Calculate distance weighted average
+				neAvg = np.sum(neVal/nanD[nIdx])/np.sum(1.0/nanD[nIdx])
+
+				#Replace nan with weighted average
+				cData[cNanIdx[nIdx,0],cNanIdx[nIdx,1],cNanIdx[nIdx,2]] = neAvg
+
+			#Replace data
+			voxData[:,:,:,cIdx] = cData
+
+		#Extract values that replaced the nans
+		coefReplace = voxData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2],0:4].reshape((nNan,4))
+
+		#Make images for flow and vb so we can use the same coordinates
+		flowData = np.zeros_like(maskData,dtype=np.float64); flowData[maskData>0] = flowMasked
+		vbData = np.zeros_like(maskData,dtype=np.float64); vbData[maskData>0] = vbMasked
+
+		#Extract flow and vb for nan replacement
+		flowReplace = flowData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2]].flatten()
+		vbReplace = vbData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2]].flatten()
+
+		#Calculate parameter values for replaced values
+		paramReplace = nagini.gluCalc(coefReplace,flowReplace,vbReplace,args.blood,args.dT)
+
+		#Apply replaced values
+		voxData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2],4:14] = paramReplace
+
+
 #############
 ###Output!###
 #############
 print('Writing out results...')
 
 #Set names for model images
-paramNames = ['gef','kOne','kTwo','kThree','kFour','cmrGlu','alphaOne','alphaTwo','betaOne','betaTwo','netEx','influx','DV','conc','nRmsd']
+paramNames = ['alphaOne','alphaTwo','betaOne','betaTwo','gef','kOne','kTwo','kThree','kFour','cmrGlu','netEx','influx','DV','conc','nRmsd']
 
 #Do the writing for parameters
 for iIdx in range(roiParams.shape[1]-1):
@@ -610,7 +594,19 @@ for iIdx in range(roiParams.shape[1]-1):
 
 	#Write out voxelwise data
 	if args.noVox != 1:
-		nagini.writeMaskedImage(voxParams[:,iIdx],maskData.shape,maskData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[iIdx]))
+
+		#What to call the output image
+		pName = '%s_%s'%(args.out[0],paramNames[iIdx])
+
+		#Create image to write out
+		outImg = nib.Nifti1Image(voxData[:,:,:,iIdx],pet.affine,header=pet.header)
+
+		#Then do the writing
+		try:
+			outImg.to_filename('%s.nii.gz'%(pName))
+		except (IOError):
+			print 'ERROR: Cannot save image at %s.'%(pName)
+			sys.exit()
 
 #Write out root mean square images
 nib.Nifti1Image(roiParams[:,-1],affine=np.identity(4)).to_filename('%s_%s.nii.gz'%(args.out[0],paramNames[-1]))
@@ -626,14 +622,13 @@ try:
 	cOut = open('%s_convergence.txt'%(args.out[0]), "w")
 
 	#Write out ROI data
-	cOut.write('%i of %i'%(roiC,nRoi))
+	cOut.write('%i of %i\n'%(roiC,nRoi))
 
 	#Write out voxel data if necessary
 	if args.noVox !=1:
-		cOut.wirite('%i of %i'%(voxC,voxParams.shape[0]),"w")
+		cOut.write('%i of %i'%(voxC,voxParams.shape[0]))
 
 	cOut.close()
 except(IOError):
 	print 'ERROR: Cannot write in output directory. Exiting...'
 	sys.exit()
-

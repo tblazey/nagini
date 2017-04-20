@@ -2344,3 +2344,76 @@ def fdgAifLstPen(param,aifTime,pAif,petTime,pet,cOne,pen,penC,coefs=False):
 		return np.sum(np.power(petResid,2)) + pen*np.sum(np.power(penC-param[0],2))
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1])
+
+def gluCalc(coefs,flow,vb,blood,dT):
+
+	"""
+
+	Caculates metabolic parameters from glucose fitting coefficients
+
+	Parameters
+	----------
+
+	coefs: array
+		A 4 or nx4 array of coefficients from glucose model
+	flow: array
+		A 1 or a nx1 array of blood flow values in 1/secs
+	vb: array
+		A 1 or a nx1 array of fractional blood volumes in mlT/mlB
+	blood: float
+	   	Blood glucose contraction in mg/dL
+	dT: float
+		Density of tissue in g/mL
+
+	Returns
+    -------
+
+	gluParams: array
+		A 10 or nx10 array of metabolic parameters
+	
+	"""
+
+	#Seperate out coeffients
+	if coefs.ndim == 1:
+		aOne = coefs[0]
+		aTwo = coefs[1]
+		bOne = coefs[2]
+		bTwo = coefs[3]
+		sAxis = 0
+	else:
+		aOne = coefs[:,0]
+		aTwo = coefs[:,1]
+		bOne = coefs[:,2]
+		bTwo = coefs[:,3]
+		sAxis = 1
+
+	#Calculate rate constants from coefficients
+	kOne = aOne + (aTwo/(bOne-bTwo)) - ((aTwo*bTwo)/((bTwo-bOne)*(flow-bOne)))
+	kThree = aTwo/kOne
+	kTwo = bOne-kThree
+	kFour = bTwo
+
+	#Calculate gef
+	gef = kOne / (flow*vb)
+
+	#Calculate metabolic rate
+	gluScale = 333.0449 / dT
+	cmrGlu = (kOne*kThree*blood)/(kTwo+kThree) * gluScale
+
+	#Calculate net extraction
+	netEx = aTwo/(bOne*flow*vb)
+
+	#Calculate influx
+	gluIn = kOne*blood*gluScale/100.0
+
+	#Calculate distrubtion volume
+	distVol =  kOne/(bOne*dT)
+
+	#Compute tissue concentration
+	gluConc = distVol * blood * 0.05550748
+
+	#Combine all the calculated parameters
+	gluParams = np.stack((gef,kOne*60.0,kTwo*60.0,kThree*60.0,kFour*60.0,cmrGlu,netEx,gluIn,distVol,gluConc),axis=sAxis)
+
+	#Return parameter estimates
+	return gluParams
