@@ -303,7 +303,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 
 	"""
 
-	def flowPred(param,pred=False):
+	def flowPred(param,weights,pred=False):
 
 
 		"""
@@ -315,6 +315,8 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 
 		param: array
 			a 2 x 1 array containing flow and lambda parameter
+		weights: array
+			a m x 1 array containing regression weights
 		pred: logical
 			Logical for what to return (see below)
 
@@ -354,7 +356,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 		if pred is True:
 			return petPred
 		else:
-			return np.sum(np.power(petPred-petTacM,2))
+			return np.sum(weights[petMask]*np.power(petPred-petTacM,2))
 
 	#Return function
 	return flowPred
@@ -387,7 +389,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 
 	"""
 
-	def flowPred(param,pred=False):
+	def flowPred(param,weights,pred=False):
 
 
 		"""
@@ -399,6 +401,8 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 
 		param: array
 			A 3 x 1 array containing flow, lambda, and delay parameters
+		weights: array
+			A m x 1 array containing regression weights
 		pred: logical
 			Logical indicating what to return (see below)
 
@@ -459,7 +463,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		if pred is True:
 			return petPred,petMask,aifMask
 		else:
-			return np.sum(np.power(petPred-petTacM,2))
+			return np.sum(weights[petMask]*np.power(petPred-petTacM,2))
 
 	#Return function
 	return flowPred
@@ -491,7 +495,7 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 
 	"""
 
-	def flowPred(param,pred=False):
+	def flowPred(param,weights,pred=False):
 
 		"""
 
@@ -502,6 +506,8 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 
 		param: array
 			A 4 x 1 array containing flow, lambda, delay, and tau
+		weight: array
+			A m x1 array containing regression weights
 		pred: logical
 			Logical indicating what to return (see below)
 
@@ -562,11 +568,12 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		#Calculate average between start and end time. Implies averaged after trap. integration
 		petPred = (startPred+endPred)/2
 
-		#Return sum of squares residuals or predictions
+		#Return weighted sum of squares residuals or predictions
 		if pred is True:
 			return petPred,petMask,aifMask
 		else:
-			return np.sum(np.power(petPred-petTacM,2))
+
+			return np.sum(weights[petMask]*np.power(petPred-petTacM,2))
 
 	#Return function
 	return flowPred
@@ -2370,7 +2377,7 @@ def gluCalc(coefs,flow,vb,blood,dT):
 
 	gluParams: array
 		A 10 or nx10 array of metabolic parameters
-	
+
 	"""
 
 	#Seperate out coeffients

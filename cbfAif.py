@@ -42,6 +42,7 @@ argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),he
 argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise lambda parameter. Default is 0 to 2.')
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise delay parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDelay is not.')
 argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise dispersion parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDisp is not.')
+argParse.add_argument('-weighted',action='store_const',const=1,help='Use weighted regression. Weights are determined by the whole-brain value')
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -160,7 +161,7 @@ sampTime = np.min(np.diff(aifTime))
 
 #Allow 50 seconds worth of extrapolation
 if args.extrap == 1:
-	interpTime = np.arange(np.floor(startTime[0]),np.ceil(endTime[-1]+sampTime+50),sampTime)
+	interpTime = np.arange(np.floor(startTime[0]-50),np.ceil(endTime[-1]+sampTime+50),sampTime)
 else:
 	interpTime = np.arange(np.floor(aifTime[0]),np.ceil(aifTime[-1]+sampTime),sampTime)
 
@@ -200,26 +201,49 @@ elif args.noDisp == 1:
 	wbFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC,wbTac,petTime)
 
 	#Add in starting point, bounds, and scale
-	wbInit.append(1); wbBounds = np.vstack((wbBounds,[-5,5])); wbScales = np.hstack((wbScales,[5]))
+	wbInit.append(1); wbBounds = np.vstack((wbBounds,[-4,4])); wbScales = np.hstack((wbScales,[10]))
 else:
 
 	#Model with delay and dispersion:
 	wbFunc = nagini.flowFour(aifFit,aifScale,interpTime,decayC,wbTac,petTime)
 
 	#Add in starting points, bounds, and scales
-	wbInit.extend([1,1]); wbBounds = np.vstack((wbBounds,[-5,5],[0.2,5])); wbScales = np.hstack((wbScales,[10,5]))
+	wbInit.extend([1,1]); wbBounds = np.vstack((wbBounds,[-4,4],[0,5])); wbScales = np.hstack((wbScales,[10,5]))
 
-#Attempt to fit model to whole-brain curve
-try:
-	wbOpt = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',bounds=wbBounds,options={'eps':0.001,'maxls':100})
-except(RuntimeError):
-	print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
-	sys.exit()
+#Create intial weights
+weights = np.ones_like(wbTac)
 
-#Make sure we converged before moving on
-if wbOpt.success is False:
+#Setup number of iterations for whole brain fitting
+if args.weighted is None:
+	wbIter = 1
+else:
+	wbIter = 5
+
+#Loop through whole-brain fit
+for wbIdx in range(wbIter):
+
+	#Attempt to fit model to whole-brain curve
+	wbOpt = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.001,'maxls':100})
+
+	#Make sure we converged before moving on
+	if wbOpt.success is False:
 		print 'ERROR: Model did not converge on whole-brain curve. Exiting...'
 		sys.exit()
+
+	#Get whole-brian fitted values
+	wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,weights,pred=True)
+
+	#Recompute weights if necessary
+	if wbIter !=1 and wbIdx != (wbIter - 1):
+
+		#Calculate median absolute deviation
+		wbResid = wbTac[wbPetMask] - wbFitted	
+		wbMad = np.median(np.abs(wbResid-np.median(wbResid))) / 0.6745
+
+		#Create weights using Huber Weight Function
+		wbU = np.abs(wbResid / wbMad); wbU[wbU<=1.345] = 1.345
+		weights = np.zeros_like(wbTac)
+		weights[wbPetMask] = 1.345 / wbU		
 
 #Remove optmization scales
 wbFit = wbOpt.x * wbScales
@@ -242,12 +266,9 @@ except(IOError):
 	print 'ERROR: Cannot write in output directory. Exiting...'
 	sys.exit()
 
-#Get whole brain fitted values
+#Make aif mask if we need to
 if args.noDelay == 1:
-	wbFitted = wbFunc(wbOpt.x,pred=True)
 	wbAifMask = np.repeat(True,interpTime.shape)	
-else:
-	wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,pred=True)
 
 #Create whole brain fit figure
 try:
@@ -387,7 +408,7 @@ for voxIdx in tqdm(range(nVox)):
 
 	try:
 		#Run fit
-		voxOpt = opt.minimize(optFunc,init,method='L-BFGS-B',bounds=bounds,options={'eps':0.001,'maxls':100})
+		voxOpt = opt.minimize(optFunc,init,method='L-BFGS-B',args=(weights),bounds=bounds,options={'eps':0.001,'maxls':100})
 
 		#Make sure we converged
 		if voxOpt.success is False:
@@ -405,7 +426,7 @@ for voxIdx in tqdm(range(nVox)):
 			fitParams[voxIdx,2:nParam] = voxOpt[2:nParam]*wbScales[2:nParam]
 
 			#Get fitted values
-			voxPred,voxMask,_ = optFunc(voxOpt.x,pred=True)
+			voxPred,voxMask,_ = optFunc(voxOpt.x,weights,pred=True)
 
 			#Calculate residuals and mean of useable tac
 			voxResid = voxPred - voxTac[voxMask]
@@ -414,7 +435,7 @@ for voxIdx in tqdm(range(nVox)):
 		else:
 
 			#Get fitted values
-			voxPred = optFunc(voxOpt.x,pred=True)
+			voxPred = optFunc(voxOpt.x,weights,pred=True)
 
 			#Calculate resisduals and mean of useable tac
 			voxResid = voxPred - voxTac[wbPetMask]
