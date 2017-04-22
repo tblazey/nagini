@@ -1687,7 +1687,7 @@ def gluAifLst(aifTime,pAif,pet,cOne,flow):
 	#Return function
 	return gluPred
 
-def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,petSum,flow,vb,pen,penC,coefs=False):
+def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,flow,vb,pen,penC,weights,coefs=False):
 
 	"""
 
@@ -1695,29 +1695,30 @@ def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,petSum,flow,vb,pen,penC,co
 	----------
 
 	params: array
-		3x1 vector of paramters.
+	   3x1 vector of paramters.
 	aifTime: array
 	   A n length array of times to samples AIF at
 	aifCoef: array
 	   A 7x1 array of coefficients for Feng Model AIF
 	pet: array
-		A m length array of pet data
+	   A m length array of pet data
 	petTime: array
-		A m x 2 array of PET start and end times
-	petSum: float
-		Sum of time activity curve. Used to normalize peanlty
+	   A m x 2 array of PET start and end times
 	cOne: array
 	   An m length array with concentration in compartment one
 	flow: float
 	   Flow in units 1/seconds.
 	vb: float
-		CBV in units mlB/mlT
+	   CBV in units mlB/mlT
 	pen: float
  	   The penalty for least squares optimization
 	penC: float
 	   Value at which penalty = 0
 	coefs: logical
-		If true, returns predictions and coefficients
+	   If true, returns predictions and coefficients
+	weights: array
+	   A m length array of weights for pet data
+	
 
 	Returns
 	-------
@@ -1774,21 +1775,24 @@ def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,petSum,flow,vb,pen,penC,co
 	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
 	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
 
+	#Construct weight matrix
+	W = np.diag(weights)
+
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
-	alpha,_,_,_ = np.linalg.lstsq(petX,pet-cOnePet)
+	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(pet-cOnePet))
 
 	#Calculate model prediction and residual
 	petPred = cOnePet + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
 	petResid = pet - petPred
 
-	#Return penalized sum of sqaures or predictions/coefficients
+	#Return weighted penalized sum of sqaures or predictions/coefficients
 	if coefs is False:
-		return np.sum(np.power(petResid,2)) + pen*petSum*np.power(np.log(penC/params[0]),2)
+		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*np.power(np.log(penC/params[0]),2)
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1,b2])
 
-def gluAifLstPen(params,aifTime,pAif,pet,petTime,petSum,cOne,flow,pen,penC,coefs=False):
+def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coefs=False):
 
 	"""
 
@@ -1796,17 +1800,15 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,petSum,cOne,flow,pen,penC,coefs
 	----------
 
 	params: array
-		2x1 vector of paramters.
+	   2x1 vector of paramters.
 	aifTime: array
 	   A n length array of times to samples AIF at
 	pAif: array
 	   A n length array containing plasma arterial input function
 	pet: array
-		A m length array of pet data
+	   A m length array of pet data
 	petTime: array
-		A m x 2 array of PET start and end times
-	petSum: float
-		Sum of time activity curve. Used to normalize peanlty
+	   A m x 2 array of PET start and end times
 	cOne: array
 	   An m length array with concentration in compartment one
 	flow: float
@@ -1815,6 +1817,8 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,petSum,cOne,flow,pen,penC,coefs
  	   The penalty for least squares optimization
 	penC: float
 	   Value at which penalty = 0
+	weights: array
+	   A m length array of weights for pet data
 	coefs: logical
 		If true, returns predictions and coefficients
 
@@ -1855,17 +1859,20 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,petSum,cOne,flow,pen,penC,coefs
 	#Remove vascular component from tac
 	petC = pet - cOne
 
+	#Construct weight matrix
+	W = np.diag(weights)
+
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
-	alpha,_,_,_ = np.linalg.lstsq(petX,petC)
+	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(petC))
 
 	#Calculate model prediction and residual
 	petPred = cOne + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
 	petResid = pet - petPred
 
-	#Return penalized sum of sqaures or predictions/coefficients
+	#Return weighted penalized sum of sqaures or predictions/coefficients
 	if coefs is False:
-		return np.sum(np.power(petResid,2)) + pen*petSum*np.power(np.log(penC/params[0]),2)
+		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*np.power(np.log(penC/params[0]),2)
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1,b2])
 

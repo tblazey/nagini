@@ -47,6 +47,7 @@ argParse.add_argument('-dB',help='Density of blood in g/mL. Default is 1.05',def
 argParse.add_argument('-oBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 0.005*[lower,upper]. Defalt is [0.2,5]')
 argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for beta two, where bounds are 0.00016*[lower,upper]. Defalt is [0.2,5]')
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for delay parameter. Default is [-25,25]')
+argParse.add_argument('-weighted',action='store_const',const=1,help='Run with weighted regression')
 args = argParse.parse_args()
 
 #Setup bounds and inits
@@ -250,25 +251,49 @@ interpTime = np.arange(np.floor(startTime[0]),np.ceil(endTime[-1]+sampTime),samp
 
 #Get whole-brain tac
 wbTac = np.mean(petMasked,axis=0)
-wbSum = np.sum(wbTac)
+
+#Construct initial weights
+weights = np.ones_like(wbTac)
 
 ###################
 ###Model Fitting###
 ###################
 print ('Beginning fitting procedure...')
 
-#Arguments for whole-brain model fit
-wbArgs = (aifGlobal.x,interpTime,wbTac,petTime,wbSum,flowWb,vbWb,args.pen[0],1)
+#Set number of iterations based upon whether or not we are going to use weights
+if args.weighted is None:
+	wbIter = 1
+else:
+	wbIter = 5
 
-#Attempt to fit model to whole-brain curve
-wbFit = opt.minimize(nagini.gluDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
-if wbFit.success is False:
-	print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
-	sys.exit()
+#Loop through whole-brain fitting iterations
+for wbIdx in range(wbIter):
 
-#Get estimated coefficients and fit
-wbOpt = wbFit.x
-wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifGlobal.x,interpTime,wbTac,petTime,wbSum,flowWb,vbWb,args.pen[0],1,coefs=True)
+	#Arguments for whole-brain model fit
+	wbArgs = (aifGlobal.x,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights)
+
+	#Attempt to fit model to whole-brain curve
+	wbFit = opt.minimize(nagini.gluDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
+
+	#Make sure we converged
+	if wbFit.success is False:
+		print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
+		sys.exit()
+
+	#Get estimated coefficients and fit
+	wbOpt = wbFit.x
+	wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifGlobal.x,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights,coefs=True)
+
+	#Recompute weights if necessary
+	if wbIter !=1 and wbIdx != (wbIter - 1):
+
+		#Calculate median absolute deviation
+		wbResid = wbTac - wbFitted	
+		wbMad = np.median(np.abs(wbResid-np.median(wbResid))) / 0.6745
+
+		#Create weights using Huber weight function
+		wbU = np.abs(wbResid / wbMad); wbU[wbU<=1.345] = 1.345
+		weights = 1.345 / wbU	
 
 #Use coefficents to calculate all my parameters
 wbParams = nagini.gluCalc(wbCoef,flowWb,vbWb,args.blood,args.dT)
@@ -315,7 +340,7 @@ try:
 	axTwo = plt.subplot(gs[0,1])
 	axTwo.scatter(drawTime,corrCounts,s=40,c="black")
 	aifFitted = nagini.fengModel(drawTime,aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
+				     aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
 	axTwo.plot(drawTime,aifFitted,linewidth=5,label='Spline Fit')
 	axTwo.set_xlabel('Time (seconds)')
 	axTwo.set_ylabel('Counts')
@@ -323,7 +348,7 @@ try:
 
 	#Interpolate input function and correct for delay
 	cAif = nagini.fengModel(drawTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-							aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
+				aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
 	cAif *= np.exp(np.log(2)/1220.04*wbOpt[2])
 
 	#Add shifted plot
@@ -342,7 +367,7 @@ try:
 except(RuntimeError,IOError):
 	print 'ERROR: Could not save figure. Moving on...'
 
-#Don't do region/roiel estimation if user says not to
+#Don't do region/voxel estimation if user says not to
 if args.noRoi == 1:
 	nagini.writeArgs(args,args.out[0])
 	sys.exit()
@@ -374,11 +399,11 @@ if args.noVox != 1:
 
 #Interpolate input function using delay
 wbAif = nagini.fengModel(interpTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-						 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+			 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
 wbAifStart = nagini.fengModel(petTime[:,0]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-							  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+			      aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
 wbAifEnd =  nagini.fengModel(petTime[:,1]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-							 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+			     aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
 
 #Get interpolated AIF integrated from start to end of pet times
 wbAifPet = (wbAifStart+wbAifEnd)/2.0
@@ -397,7 +422,6 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 	roiMask = roiMasked==uRoi[roiIdx]
 	roiVoxels = petMasked[roiMask,:]
 	roiTac = np.mean(roiVoxels,axis=0)
-	roiSum = np.sum(roiTac)
 
 	#Get regional flow and vb
 	roiVb = vbMasked[roiMask]
@@ -410,11 +434,11 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 	try:
 		#Run fit
-		roiArgs = (interpTime,pAif,roiTac,petTime,roiSum,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0])
+		roiArgs = (interpTime,pAif,roiTac,petTime,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0],weights)
 		roiOpt = opt.minimize(nagini.gluAifLstPen,roiInit,args=roiArgs,method='L-BFGS-B',bounds=roiBounds,options={'maxls':100})
 
 		#Extract coefficients
-		roiFitted,roiCoef = nagini.gluAifLstPen(roiOpt.x,interpTime,pAif,roiTac,petTime,roiSum,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0],coefs=True)
+		roiFitted,roiCoef = nagini.gluAifLstPen(roiOpt.x,interpTime,pAif,roiTac,petTime,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0],weights,coefs=True)
 
 		#Caculate roi paramter values
 		roiVals = nagini.gluCalc(roiCoef,roiFlowMean,roiVbMean,args.blood,args.dT)
@@ -469,7 +493,6 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 		#Get voxel data
 		voxTac = roiVoxels[voxIdx,:]
-		voxSum = np.sum(voxTac)
 		voxVb = roiVb[voxIdx]
 		voxFlow = roiFlow[voxIdx]
 
@@ -478,11 +501,11 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 		try:
 			#Run fit
-			voxArgs = (interpTime,pAif,voxTac,petTime,voxSum,cOneVox,voxFlow,args.voxPen[0],voxInit[0])
+			voxArgs = (interpTime,pAif,voxTac,petTime,voxSum,cOneVox,voxFlow,args.voxPen[0],voxInit[0],weights)
 			voxOpt = opt.minimize(nagini.gluAifLstPen,voxInit,args=voxArgs,method='L-BFGS-B',bounds=voxBounds,options={'maxls':100})
 
 			#Extract coefficients
-			voxFitted,voxCoef = nagini.gluAifLstPen(voxOpt.x,interpTime,pAif,voxTac,petTime,voxSum,cOneVox,voxFlow,args.voxPen[0],voxInit[0],coefs=True)
+			voxFitted,voxCoef = nagini.gluAifLstPen(voxOpt.x,interpTime,pAif,voxTac,petTime,cOneVox,voxFlow,args.voxPen[0],voxInit[0],weights,coefs=True)
 
 			#Caculate voxel parameters
 			voxVals = nagini.gluCalc(voxCoef,voxFlow,voxVb,args.blood,args.dT)
