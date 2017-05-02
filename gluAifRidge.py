@@ -246,7 +246,7 @@ aifFit,aifCov =  opt.curve_fit(nagini.fengModel,drawTime,corrCounts,inits,bounds
 aifGlobal = opt.basinhopping(nagini.fengModelGlobal,aifFit,minimizer_kwargs={'args':(drawTime,corrCounts),'bounds':np.array(bounds).T})
 
 #Get interpolation times as start to end of pet scan with aif sampling rate
-sampTime = np.min(np.diff(drawTime))
+sampTime = np.min(np.diff(np.sort(drawTime)))
 interpTime = np.arange(np.floor(startTime[0]),np.ceil(endTime[-1]+sampTime),sampTime)
 
 #Get whole-brain tac
@@ -501,7 +501,7 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 		try:
 			#Run fit
-			voxArgs = (interpTime,pAif,voxTac,petTime,voxSum,cOneVox,voxFlow,args.voxPen[0],voxInit[0],weights)
+			voxArgs = (interpTime,pAif,voxTac,petTime,cOneVox,voxFlow,args.voxPen[0],voxInit[0],weights)
 			voxOpt = opt.minimize(nagini.gluAifLstPen,voxInit,args=voxArgs,method='L-BFGS-B',bounds=voxBounds,options={'maxls':100})
 
 			#Extract coefficients
