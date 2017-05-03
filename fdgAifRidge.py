@@ -28,22 +28,27 @@ argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('dta',help='Dta file with drawn samples',nargs=1,type=str)
 argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
 argParse.add_argument('blood',help='Blood glucose concentration mg/dL',type=float)
-argParse.add_argument('hct',help='Hematorcrit ratio',type=float)
+argParse.add_argument('roi',help='ROIs for two stage procedure',nargs=1,type=str)
 argParse.add_argument('cbv',help='CBV image for blood volume correction in mL/hg',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
+argParse.add_argument('-pen',help='Penalty term for whole-brain estimates. Default is 3.0',nargs=1,type=float,default=[3.0])
+argParse.add_argument('-roiPen',help='Penalty term for ROI estimates. Default is 2.5',nargs=1,type=float,default=[2.5])
+argParse.add_argument('-voxPen',help='Penalty term for voxel estimates. Default is 15.0',nargs=1,type=float,default=[15.0])
 argParse.add_argument('-lc',help='Lumped Constant. Default is 0.52',nargs=1,type=float,default=[0.52])
 argParse.add_argument('-cbf',help='CBF image. In mL/hg*min. If given, script will calculate GEF',nargs=1,type=str)
 argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('-seg',help='Segmentation image used to create CBV averages.',nargs=1,type=str)
 argParse.add_argument('-fwhm',help='Apply smoothing kernel to CBF and CBV',nargs=1,type=float)
 argParse.add_argument('-fwhmSeg',help='Apply smoothing kerenl to CBV segmentation image',nargs=1,type=float)
-argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
-argParse.add_argument('-noDelay',action='store_const',const=1,help='Do not include AIF delay term in model.')
-argParse.add_argument('-fModel',action='store_const',const=1,help='Does delay estimate at each voxel.')
+argParse.add_argument('-noRoi',action='store_const',const=1,help='Do not perform region estimation. Implies -noVox')
+argParse.add_argument('-noVox',action='store_const',const=1,help='Do not perform voxel estimation')
+argParse.add_argument('-noFill',action='store_const',const=1,help='Do not replace nans with 6-neighbor average')
 argParse.add_argument('-dT',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-dB',help='Density of blood in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-bBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 0.0038*[lower,upper]. Defalt is [0.2,5]')
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for delay parameter. Default is [-25,25]')
+argParse.add_argument('-weighted',action='store_const',const=1,help='Run with weighted regression')
+argParse.add_argument('-aifText',action='store_const',const=1,help='AIF is a simple 2 column file with sample times and deca corrected activity',type=str)
 args = argParse.parse_args()
 
 #Setup bounds and inits
@@ -71,7 +76,7 @@ for bIdx in range(len(uBounds)):
 #Load needed libraries
 import numpy as np, nibabel as nib, nagini, sys, scipy.optimize as opt
 import scipy.interpolate as interp, matplotlib.pyplot as plt, matplotlib.gridspec as grid
-import scipy.ndimage.filters as filt
+import scipy.ndimage.filters as filt, scipy.spatial as spat
 from tqdm import tqdm
 
 #Ignore invalid  and overflow warnings
@@ -82,18 +87,33 @@ np.seterr(invalid='ignore',over='ignore')
 #########################
 print ('Loading images...')
 
-#Load in the dta file
-dta = nagini.loadDta(args.dta[0])
+#AIF loading logic
+if args.aifText:
+
+	#Load dta file
+	dta = nagini.loadDta(args.dta[0])
+
+	#Get decay correct activity
+	drawTime,corrCounts = nagini.corrDta(dta,6586.26,args.dB,toDraw=False,dTime=False)
+
+else:
+
+	#Load in simple aif text file
+	aifData = np.loadtxt(args.dta[0])
+
+	#Rename so variables have same names
+	drawTime = aifData[:,0]; corrCounts = aifData[:,1]
 
 #Load in the info file
 info = nagini.loadInfo(args.info[0])
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
+roi = nagini.loadHeader(args.roi[0])
 cbv = nagini.loadHeader(args.cbv[0])
 
 #Check to make sure dimensions match
-if pet.shape[3] != info.shape[0] or pet.shape[0:3] != cbv.shape[0:3] :
+if pet.shape[3] != info.shape[0] or pet.shape[0:3] != cbv.shape[0:3] or pet.shape[0:3] != roi.shape[0:3]:
 	print 'ERROR: Data dimensions do not match. Please check...'
 	sys.exit()
 
@@ -118,6 +138,7 @@ else:
 #Get the image data
 petData = pet.get_data()
 cbvData = cbv.get_data().reshape(pet.shape[0:3])
+roiData = roi.get_data().reshape(pet.shape[0:3])
 
 #Segmentation logic
 if args.seg is not None:
@@ -150,7 +171,7 @@ if args.seg is not None:
 			cbvData[segData==0] = 0.0
 
 #Get mask where inputs are non_zero
-maskData = np.where(np.logical_and(brainData!=0,cbvData!=0),1,0)
+maskData = np.where(np.logical_and(roiData!=0,np.logical_and(brainData!=0,cbvData!=0),1,0))
 
 #Prep CBV data
 if args.fwhm is None:
@@ -166,13 +187,13 @@ else:
 
 #Get cbv in units mlB/mlT
 vbMasked = cbvMasked / 100.0 * args.dT
-vbWb = np.median(vbMasked)
+vbWb = np.mean(vbMasked)
 
 #CBF logic
 if args.cbf is not None:
 
 	#Load in cbf header
-	cbf = nagini.loadHeader(args.cbf[0])
+	cbf = nagini.loadHeader(args.cbf[0]).reshape(pet.shape[0:3])
 
 	#Make sure its dimensions match
 	if pet.shape[0:3] != cbf.shape[0:3]:
@@ -203,9 +224,6 @@ endTime = info[:,2] + startTime
 
 #Combine PET start and end times into one array
 petTime = np.stack((startTime,endTime),axis=1)
-
-#Get decay corrected blood curve to injection
-drawTime,corrCounts = nagini.corrDta(dta,6586.26,args.dB,toDraw=False,dTime=False)
 
 #Apply time offset that was applied to images
 corrCounts *= np.exp(np.log(2)/6586.26*info[0,0])
@@ -255,60 +273,63 @@ aifFit,aifCov =  opt.curve_fit(nagini.fengModel,drawTime,corrCounts,inits,bounds
 #Run global optimization
 aifGlobal = opt.basinhopping(nagini.fengModelGlobal,aifFit,minimizer_kwargs={'args':(drawTime,corrCounts),'bounds':np.array(bounds).T})
 
-#Get interpolation times as start to end of pet scan with aif sampling rate
-sampTime = np.min(np.diff(drawTime))
+#Get interpolation times as start to end of pet scan with aif sampling rate
+sampTime = np.min(np.diff(np.sort(drawTime)))
 interpTime = np.arange(np.floor(startTime[0]),np.ceil(endTime[-1]+sampTime),sampTime)
 
 #Get whole-brain tac
 wbTac = np.mean(petMasked,axis=0)
+
+#Construct initial weights
+weights = np.ones_like(wbTac)
 
 ###################
 ###Model Fitting###
 ###################
 print ('Beginning fitting procedure...')
 
-#Setup the proper model function
-if args.noDelay == 1:
-
-	#Delete bounds and initlization for delay paratmer
-	del wbInit[-1]; del wbBounds[0][-1]; del wbBounds[1][-1]
-
-	#Interpolate Aif
-	wbAif = nagini.fengModel(interpTime,aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-	wbAifStart = nagini.fengModel(petTime[:,0],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-	wbAifEnd = nagini.fengModel(petTime[:,1],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-
-	#Get interpolated AIF integrated from start to end of pet times
-	wbAifPet = (wbAifStart + wbAifEnd) / 2.0
-
-	#Get concentration in compartment one
-	cOneWb = vbWb*wbAifPet
-
-	#Convert AIF to plasma
-	rbcToPlasma = 0.814101 + 0.000680*interpTime/60.0 + .103307*(1-np.exp(-interpTime/60.0/50.052431))
-	pAif = wbAif / (args.hct*rbcToPlasma + 1 - args.hct)
-
-	#No delay function
-	wbFunc = nagini.fdgAifLst(interpTime,pAif,wbTac,cOneWb)
+#Set number of iterations based upon whether or not we are going to use weights
+if args.weighted is None:
+	wbIter = 1
 else:
+	wbIter = 5
 
-	#Model with delay
-	wbFunc = nagini.fdgDelayLst(aifGlobal.x,interpTime,wbTac,vbWb,args.hct)
+#Loop through whole-brain fitting iterations
+for wbIdx in range(wbIter):
 
-#Attempt to fit model to whole-brain curve
-try:
-	wbOpt,wbCov = opt.curve_fit(wbFunc,petTime,wbTac,p0=wbInit,bounds=wbBounds)
-except(RuntimeError):
-	print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
-	sys.exit()
+	#Arguments for whole-brain model fit
+	wbArgs = (aifGlobal.x,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights)
 
-#Calculate whole-brain correlation matrix
-sdMat = np.diag(np.sqrt(np.diag(wbCov)))
-sdMatI = np.linalg.inv(sdMat)
-wbCor = sdMatI.dot(wbCov).dot(sdMatI)
+	#Attempt to fit model to whole-brain curve
+	wbFit = opt.minimize(nagini.fdgDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
+
+	#Make sure we converged
+	if wbFit.success is False:
+		print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
+		sys.exit()
+
+	#Get estimated coefficients and fit
+	wbOpt = wbFit.x
+	wbFitted,wbCoef = nagini.fdgDelayLstPen(wbOpt,aifGlobal.x,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights,coefs=True)
+
+	#Recompute weights if necessary
+	if wbIter !=1 and wbIdx != (wbIter - 1):
+
+		#Calculate median absolute deviation
+		wbResid = wbTac - wbFitted
+		wbMad = np.median(np.abs(wbResid-np.median(wbResid))) / 0.6745
+
+		#Create weights using Huber weight function
+		wbU = np.abs(wbResid / wbMad); wbU[wbU<=1.345] = 1.345
+		weights = 1.345 / wbU
+
+#Use coefficents to calculate all my parameters
+if args.cbf is None:
+	wbParams = nagini.fdgCalc(wbCoef,vbWb,args.blood,args.dT,args.lc)
+else:
+	#Get mean flow
+	flowWb = np.mean(flowMasked)
+	wbParams = nagini.fdgCalc(wbCoef,vbWb,args.blood,args.dT,args.lc,flow=flowWb)
 
 #Get estimated coefficients and fit
 if args.noDelay == 1:

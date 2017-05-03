@@ -123,9 +123,9 @@ else:
 
 #Get the image data
 petData = pet.get_data()
-cbfData = cbf.get_data()
-cbvData = cbv.get_data()
-roiData = roi.get_data()
+cbfData = cbf.get_data().reshape(pet.shape[0:3])
+cbvData = cbv.get_data().reshape(pet.shape[0:3])
+roiData = roi.get_data().reshape(pet.shape[0:3])
 
 #Segmentation logic
 if args.seg is not None:
@@ -139,7 +139,7 @@ if args.seg is not None:
 		sys.exit()
 
 	#Load in segmentation data'
-	segData = seg.get_data()
+	segData = seg.get_data().reshape(pet.shape[0:3])
 
 	#Make a new segmentation where we have high CBV
 	segData[cbvData>=8.0] = np.max(segData)+1
@@ -152,8 +152,8 @@ if args.seg is not None:
 
 	#Smooth
 	if args.fwhmSeg is not None:
-			roiSize = pet.header.get_zooms()
-			sigmas = np.divide(args.fwhmSeg[0]/np.sqrt(8.0*np.log(2.0)),roiSize[0:3])
+			voxSize = pet.header.get_zooms()
+			sigmas = np.divide(args.fwhmSeg[0]/np.sqrt(8.0*np.log(2.0)),voxSize[0:3])
 			cbvData = filt.gaussian_filter(cbvData,sigmas).reshape(cbvData.shape)
 			cbvData[segData==0] = 0.0
 
@@ -171,8 +171,8 @@ if args.fwhm is None:
 	cbvMasked = cbvData[maskData>0].flatten()
 else:
 	#Prepare for smoothing
-	roiSize = pet.header.get_zooms()[0:3]
-	sigmas = np.divide(args.fwhm[0]/np.sqrt(8.0*np.log(2.0)),roiSize[0:3])
+	voxSize = pet.header.get_zooms()
+	sigmas = np.divide(args.fwhm[0]/np.sqrt(8.0*np.log(2.0)),voxSize[0:3])
 
 	#Smooth and mask data
 	cbfMasked = filt.gaussian_filter(cbfData,sigmas)[maskData>0].flatten()
@@ -288,12 +288,12 @@ for wbIdx in range(wbIter):
 	if wbIter !=1 and wbIdx != (wbIter - 1):
 
 		#Calculate median absolute deviation
-		wbResid = wbTac - wbFitted	
+		wbResid = wbTac - wbFitted
 		wbMad = np.median(np.abs(wbResid-np.median(wbResid))) / 0.6745
 
 		#Create weights using Huber weight function
 		wbU = np.abs(wbResid / wbMad); wbU[wbU<=1.345] = 1.345
-		weights = 1.345 / wbU	
+		weights = 1.345 / wbU
 
 #Use coefficents to calculate all my parameters
 wbParams = nagini.gluCalc(wbCoef,flowWb,vbWb,args.blood,args.dT)
