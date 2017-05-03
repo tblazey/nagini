@@ -300,7 +300,7 @@ wbParams = nagini.gluCalc(wbCoef,flowWb,vbWb,args.blood,args.dT)
 
 #Create string for whole-brain parameter estimates
 labels = ['gef','kOne','kTwo','kThree','kFour','cmrGlu',
-          'alphaOne','alphaTwo','betaOne','betaTwo','netEx','infux','DV','conc']
+          'alphaOne','alphaTwo','betaOne','betaTwo','netEx','influx','DV','conc']
 values = [wbParams[0],wbParams[1],wbParams[2],wbParams[3],wbParams[4],wbParams[5],
           wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],wbParams[6],wbParams[7],wbParams[8],wbParams[9]]
 units = ['fraction','mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min',

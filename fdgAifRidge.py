@@ -48,7 +48,7 @@ argParse.add_argument('-dB',help='Density of blood in g/mL. Default is 1.05',def
 argParse.add_argument('-bBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 0.0038*[lower,upper]. Defalt is [0.2,5]')
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for delay parameter. Default is [-25,25]')
 argParse.add_argument('-weighted',action='store_const',const=1,help='Run with weighted regression')
-argParse.add_argument('-aifText',action='store_const',const=1,help='AIF is a simple 2 column file with sample times and deca corrected activity',type=str)
+argParse.add_argument('-aifText',action='store_const',const=1,help='AIF is a simple 2 column file with sample times and decay corrected activity')
 args = argParse.parse_args()
 
 #Setup bounds and inits
@@ -87,14 +87,20 @@ np.seterr(invalid='ignore',over='ignore')
 #########################
 print ('Loading images...')
 
+#Load in the info file
+info = nagini.loadInfo(args.info[0])
+
 #AIF loading logic
-if args.aifText:
+if args.aifText is None:
 
 	#Load dta file
 	dta = nagini.loadDta(args.dta[0])
 
 	#Get decay correct activity
 	drawTime,corrCounts = nagini.corrDta(dta,6586.26,args.dB,toDraw=False,dTime=False)
+
+	#Apply pie factor and scale factor to AIF
+	corrCounts /= (args.pie[0] * 0.06 )
 
 else:
 
@@ -104,8 +110,8 @@ else:
 	#Rename so variables have same names
 	drawTime = aifData[:,0]; corrCounts = aifData[:,1]
 
-#Load in the info file
-info = nagini.loadInfo(args.info[0])
+#Apply time offset that was applied to images
+corrCounts *= np.exp(np.log(2)/6586.26*info[0,0])
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
@@ -225,12 +231,6 @@ endTime = info[:,2] + startTime
 #Combine PET start and end times into one array
 petTime = np.stack((startTime,endTime),axis=1)
 
-#Apply time offset that was applied to images
-corrCounts *= np.exp(np.log(2)/6586.26*info[0,0])
-
-#Apply pie factor and scale factor to AIF
-corrCounts /= (args.pie[0] * 0.06 )
-
 #########################
 ###Data Pre-Processing###
 #########################
@@ -325,52 +325,22 @@ for wbIdx in range(wbIter):
 
 #Use coefficents to calculate all my parameters
 if args.cbf is None:
-	wbParams = nagini.fdgCalc(wbCoef,vbWb,args.blood,args.dT,args.lc)
+	wbParams = nagini.fdgCalc(wbCoef,args.blood,args.dT,args.lc)
 else:
 	#Get mean flow
 	flowWb = np.mean(flowMasked)
-	wbParams = nagini.fdgCalc(wbCoef,vbWb,args.blood,args.dT,args.lc,flow=flowWb)
+	wbParams = nagini.fdgCalc(wbCoef,args.blood,args.dT,args.lc,flow=flowWb,vb=vbWb)
 
-#Get estimated coefficients and fit
-if args.noDelay == 1:
-	wbFitted,wbCoef = wbFunc(petTime,wbOpt[0],coefs=True)
-else:
-	wbFitted,wbCoef = wbFunc(petTime,wbOpt[0],wbOpt[1],coefs=True)
-
-#Calculate rate constants from my alphas and betas
-kOneWb = wbCoef[0]
-kThreeWb = wbCoef[1]*wbCoef[2]/wbCoef[0]
-kTwoWb = wbCoef[2]-kThreeWb
-
-#Calculate metabolic rate
-gluScale = 333.0449 / args.dT
-wbCmr = wbCoef[1] * args.blood * gluScale / args.lc[0]
-
-#Calculate gef nad net extraction if we have blood flow
-if args.cbf is not None:
-
-	#Get mean flow
-	flowWb = np.mean(flowMasked)
-
-	#Calculate get
-	gefWb = kOneWb / (flowWb*vbWb)
-
-	#Calculate net extraction
-	wbNet = wbCoef[1] / (flowWb*vbWb)
-
-#Calculate influx
-wbIn = kOneWb*args.blood*gluScale/100.0
-
-#Calculate distrubtion volume
-wbDv =  kOneWb/(wbCoef[2]*args.dT)
-
-#Compute tissue concentration
-wbConc = wbDv * args.blood * 0.05550748
-
-#Make labels for whole-brain parameter estimates
-labels = ['kOne','kTwo','kThree','cmrGlu','alphaOne','alphaTwo','betaOne','infux','DV','conc','condition']
-values = [kOneWb*60,kTwoWb*60,kThreeWb*60,wbCmr,wbCoef[0],wbCoef[1],wbCoef[2],wbIn,wbDv,wbConc,np.linalg.cond(wbCov)]
-units = ['mLBlood/mLTissue/min','1/min','1/min','uMol/hg/min','1/sec','1/sec','1/sec','uMol/g/min','mLBlood/mLTissue','uMol/g','unitless']
+#Create string for whole-brain parameter estimates
+labels = ['kOne','kTwo','kThree','cmrGlu',
+          'alphaOne','alphaTwo','betaOne',
+		  'influx','DV','conc','delay']
+values = [wbParams[0],wbParams[1],wbParams[2],wbParams[3],
+          wbCoef[0],wbCoef[1],wbCoef[2],
+		  wbParams[4],wbParams[5],wbParams[6],wbOpt[1/60.0]]
+units = ['mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min',
+         '1/sec','1/sec','mLBlood/mLTissue/sec',
+		 'uMol/g/min','mLBlood/mLTissue','uMol/g','min']
 
 #Add in labels if we have cbf
 if args.cbf is not None:
@@ -383,22 +353,12 @@ wbString = ''
 for pIdx in range(len(labels)):
 	wbString += '%s = %f (%s)\n'%(labels[pIdx],values[pIdx],units[pIdx])
 
-#Add in delay estimate
-if args.noDelay is None:
-	wbString += 'delay = %f (min)\n'%(wbOpt[1]/60.0)
-
 #Write out whole-brain results
 try:
 	#Write out values
 	wbOut = open('%s_wbVals.txt'%(args.out[0]), "w")
 	wbOut.write(wbString)
 	wbOut.close()
-
-	#Write out covariance matrix
-	np.savetxt('%s_wbCov.txt'%(args.out[0]),wbCov)
-
-	#Write out correlation matrix
-	np.savetxt('%s_wbCor.txt'%(args.out[0]),wbCor)
 
 except(IOError):
 	print 'ERROR: Cannot write in output directory. Exiting...'
@@ -428,16 +388,13 @@ try:
 	axTwo.set_ylabel('Counts')
 	axTwo.set_title('Arterial Sampled Input function')
 
-	#Show corrected input funciton as well
-	if args.noDelay != 1:
-
-		#Interpolate input function and correct for delay
-		cAif = nagini.fengModel(drawTime+wbOpt[1],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
+	#Interpolate input function and correct for delay
+	cAif = nagini.fengModel(drawTime+wbOpt[1],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
 								  aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-		cAif *= np.exp(np.log(2)/6586.26*wbOpt[1])
+	cAif *= np.exp(np.log(2)/6586.26*wbOpt[1])
 
-		#Add shifted plot
-		axTwo.plot(drawTime,cAif,linewidth=5,c='green',label='Delay Corrected')
+	#Add shifted plot
+	axTwo.plot(drawTime,cAif,linewidth=5,c='green',label='Delay Corrected')
 
 	#Make sure we have legend for input function plot
 	axTwo.legend(loc='upper right')
@@ -452,8 +409,8 @@ try:
 except(RuntimeError,IOError):
 	print 'ERROR: Could not save figure. Moving on...'
 
-#Don't do voxelwise estimation if user says not to
-if args.wbOnly == 1:
+#Don't do region/voxel estimation if user says not to
+if args.noRoi == 1:
 	nagini.writeArgs(args,args.out[0])
 	sys.exit()
 

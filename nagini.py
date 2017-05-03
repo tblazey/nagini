@@ -2343,7 +2343,7 @@ def gluCalc(coefs,flow,vb,blood,dT):
 	#Return parameter estimates
 	return gluParams
 
-def fdgCalc(coefs,vb,blood,dT,lc,vb=None,flow=None):
+def fdgCalc(coefs,blood,dT,lc,vb=None,flow=None):
 
 	"""
 
@@ -2369,7 +2369,7 @@ def fdgCalc(coefs,vb,blood,dT,lc,vb=None,flow=None):
     -------
 
 	fdgParams: array
-		A 10 or nx10 array of metabolic parameters
+		If flow and vb are set, returns a 9x1 or nx1 array, else a 8x1 or nx1 array
 
 	"""
 
@@ -2390,28 +2390,33 @@ def fdgCalc(coefs,vb,blood,dT,lc,vb=None,flow=None):
 	kThree = aTwo*betaOne/aOne
 	kTwo = bOne-kThree
 
-	#Calculate gef if necessary
-	if flow not None and cbv not None:
-		gef = kOne / (flow*vb)
-
 	#Calculate metabolic rate
 	gluScale = 333.0449 / dT
-	cmrGlu = (kOne*kThree*blood)/(kTwo+kThree) * gluScale / lc
-
-	#Calculate net extraction
-	netEx = aTwo/(bOne*flow*vb)
+	cmrGlu = aTwo * blood * gluScale / lc
 
 	#Calculate influx
-	gluIn = kOne*blood*gluScale/100.0
+	fdgIn = kOne*blood*gluScale/100.0
 
-	#Calculate distrubtion volume
+	#Calculate distrubtion volume (AKA free glucose)
 	distVol =  kOne/(bOne*dT)
 
 	#Compute tissue concentration
-	gluConc = distVol * blood * 0.05550748
+	fdgConc = distVol * blood * 0.05550748
+
+	#Additional parameters if flow and cbv are supplied
+	if flow is not None and cbv is not None:
+
+		#Calculate glucose extraction fraction
+		fef = kOne / (flow*vb)
+
+		#Calculate net extraction
+		netEx = aTwo/(flow*vb)
 
 	#Combine all the calculated parameters
-	gluParams = np.stack((gef,kOne*60.0,kTwo*60.0,kThree*60.0,kFour*60.0,cmrGlu,netEx,gluIn,distVol,gluConc),axis=sAxis)
+	if flow is not None and cbv is not None:
+		fdgParams = np.stack((kOne*60.0,kTwo*60.0,kThree*60.0,cmrGlu,fdgIn,distVol,fdgConc,fef,netEx),axis=sAxis)
+	else:
+		fdgParams = np.stack((kOne*60.0,kTwo*60.0,kThree*60.0,cmrGlu,fdgIn,distVol,fdgConc),axis=sAxis)
 
 	#Return parameter estimates
-	return gluParams
+	return fdgParams
