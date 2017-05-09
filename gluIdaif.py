@@ -11,23 +11,23 @@ gluIdaif.py: Calculates cmrGlu using a FDG water scan and an image-derived input
 Uses basic three-parameter two-compartment model (irreverisble binding)
 See Carson, 2003 Positron Emission Tomography: Basic Science and Clinical Practice.
 
-Can perform an optional CBV correction using method used in: Sasaki et al, JCBF&M 1986 
+Can perform an optional CBV correction using method used in: Sasaki et al, JCBF&M 1986
 
 Requires the following inputs:
 	pet -> PET FDG image.
-	info -> Yi Su style PET info file. 
+	info -> Yi Su style PET info file.
 	idaif -> Image derivied arterial input function
 	brain -> Brain mask in the same space as pet.
 	blood -> Estimate value for blood glucose level in mg/dL.
 	out -> Root for all outputed file
-	
+
 User can set the following options:
 	d -> Density of brain tissue in g/mL. Default is 1.05
 	lc -> Value for the lumped constant. Default is 0.52
 	oneB -> Bounds for k1. Default is 10 times whole brain value. Ignored if -flow is used.
 	twoB -> Bounds for k2. Default is 10 times whole brain value.
 	thrB -> Bounds for k3. Default is 10 times whole brain value.
-	gefB -> Bounds for glucose extraction fraction. Default is 0 to 1. Only valid if -flow is used. 
+	gefB -> Bounds for glucose extraction fraction. Default is 0 to 1. Only valid if -flow is used.
 	cbv -> CBV pet image in mL/hg
 	cbf -> CBF pet image in mL/hg/min
 	omega -> Ratio of FDG radioactivity in whole blood and plasma for CBV correction. Default is 0.9.
@@ -97,7 +97,7 @@ print ('Loading images...')
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
-brain = nagini.loadHeader(args.brain[0]) 
+brain = nagini.loadHeader(args.brain[0])
 
 #Load in the idaif.
 idaif = nagini.loadIdaif(args.idaif[0])
@@ -134,7 +134,7 @@ if ( args.cbv is not None ):
 	cbvMasked = cbvData.flatten()[brainData.flatten()>0] / 100 * args.d
 
 	#Correct all the tacs for blood volume
-	petMasked = petMasked - (args.omega*cbvMasked[:,np.newaxis]*idaif)
+	petMasked = petMasked - cbvMasked[:,np.newaxis]*idaif*(9.296300e-01 + 1.046033e-05*petTime)
 
 #Load cbf image if necessary
 if ( args.cbf is not None ):
@@ -201,7 +201,7 @@ else:
 
 	#Create string for whole-brain parameter estimates
 	wbString = 'GEF=%f\nkOne=%f\nkTwo=%f\nkThree=%f\nCMRglu=%f'%(wbFit[0][0],wbFit[0][0]*wbCbf,wbFit[0][1],wbFit[0][2],wbGlu)
-	
+
 
 #Write out whole-brain results
 try:
@@ -237,13 +237,13 @@ if args.cbf is None:
 	#Create data structure for results and set output names
 	fitParams = np.zeros((nVox,9))
 	imgNames = ['kOne','kTwo','kThree','cmrGlu','kOne_var','kTwo_var','kThree_var','cmrGlu_var','nRmsd']
-	
+
 else:
-	
+
 	#Set bounds for gef based model
 	bounds = np.array(([0,init[1]/25.0,init[2]/25.0],[1,init[1]*25.0,init[2]*25.0]),dtype=np.float)
 	bList = [args.gefB,args.twoB,args.thrB]
-	
+
 	#Create data structure for results and set output names
 	fitParams = np.zeros((nVox,11))
 	imgNames = ['gef','kTwo','kThree','kOne','cmrGlu','gef_var','kTwo_var','kThree_var','kOne_var','cmrGlu_var','nRmsd']
@@ -256,21 +256,21 @@ for bound in bList:
 		bounds[0,bIdx] = bound[0]
 		bounds[1,bIdx] = bound[1]
 		#Use midpoint between bounds as initial value if whole brain estimate is not in bounds
-		if init[bIdx] < bound[0] or init[bIdx] > bound[1]:		
+		if init[bIdx] < bound[0] or init[bIdx] > bound[1]:
 			init[bIdx] = (bound[0]+bound[1]) / 2
 	bIdx += 1
 
 #Loop through every voxel
-noC = 0; 
+noC = 0;
 for voxIdx in tqdm(range(nVox)):
-	
+
 	#Get voxel tac and then interpolate it
 	voxTac = petMasked[voxIdx,:]
 
 	try:
 		#Run the appropriate kinetic model
 		if args.cbf is None:
-			
+
 			#Fit model with k1 estimate
 			voxFit = opt.curve_fit(wbFunc,petTime,voxTac,p0=init,bounds=bounds)
 
@@ -280,7 +280,7 @@ for voxIdx in tqdm(range(nVox)):
 
 			#Save estimated parameter variances. Use delta method to get cmrGlu variance.
 			fitParams[voxIdx,4:7] = np.diag(voxFit[1])
-			gluGrad = np.array([(gluScale*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]), 
+			gluGrad = np.array([(gluScale*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]),
 				    	   (-1*voxFit[0][0]*voxFit[0][2]*gluScale)/np.power(voxFit[0][1]+voxFit[0][2],2),
 				           (voxFit[0][0]*voxFit[0][1]*gluScale)/np.power(voxFit[0][1]+voxFit[0][2],2)])
 			fitParams[voxIdx,7] = np.dot(np.dot(gluGrad.T,voxFit[1]),gluGrad)
@@ -290,7 +290,7 @@ for voxIdx in tqdm(range(nVox)):
 			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0])
 			fitParams[voxIdx,8] = fitRmsd / np.mean(voxTac)
 
-			
+
 		else:
 			#Fit model with gef estimate
 			voxFunc = nagini.gluThree(interpTime,aifInterp,cbf=cbfMasked[voxIdx])
@@ -304,7 +304,7 @@ for voxIdx in tqdm(range(nVox)):
 			#Save parameter variances. Use delta method to get cmrGlu and k1 variance
 			fitParams[voxIdx,5:8] = np.diag(voxFit[1])
 			fitParams[voxIdx,8] = voxFit[1][0][0] * np.power(cbfMasked[voxIdx],2)
-			gluGrad = np.array([(gluScale*cbfMasked[voxIdx]*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]), 
+			gluGrad = np.array([(gluScale*cbfMasked[voxIdx]*voxFit[0][2])/(voxFit[0][1]+voxFit[0][2]),
 				    	    (-1*voxFit[0][0]*voxFit[0][2]*gluScale*cbfMasked[voxIdx])/np.power(voxFit[0][1]+voxFit[0][2],2),
 				            (voxFit[0][0]*voxFit[0][1]*gluScale*cbfMasked[voxIdx])/np.power(voxFit[0][1]+voxFit[0][2],2)])
 			fitParams[voxIdx,9] = np.dot(np.dot(gluGrad.T,voxFit[1]),gluGrad)
@@ -312,7 +312,7 @@ for voxIdx in tqdm(range(nVox)):
 			#Get normalized root mean square deviation
 	 		fitResid = voxTac - voxFunc(fitX,voxFit[0][0],voxFit[0][1],voxFit[0][2])
 			fitRmsd = np.sqrt(np.sum(np.power(fitResid,2))/voxTac.shape[0])
-			fitParams[voxIdx,10] = fitRmsd / np.mean(voxTac)	
+			fitParams[voxIdx,10] = fitRmsd / np.mean(voxTac)
 
 	except(RuntimeError):
 		noC += 1
@@ -329,4 +329,3 @@ print('Writing out results...')
 #Write out two parameter model images
 for iIdx in range(len(imgNames)):
 	nagini.writeMaskedImage(fitParams[:,iIdx],brain.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],imgNames[iIdx]))
-

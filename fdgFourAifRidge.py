@@ -45,7 +45,8 @@ argParse.add_argument('-noVox',action='store_const',const=1,help='Do not perform
 argParse.add_argument('-noFill',action='store_const',const=1,help='Do not replace nans with 6-neighbor average')
 argParse.add_argument('-dT',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-dB',help='Density of blood in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
-argParse.add_argument('-bBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 0.0038*[lower,upper]. Defalt is [0.2,5]')
+argParse.add_argument('-oBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 5.88E-5*[lower,upper]. Default is [0.2,5]')
+argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta two, where bounds are 0.0038*[lower,upper]. Default is [0.2,5]')
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for delay parameter. Default is [-25,25]')
 argParse.add_argument('-weighted',action='store_const',const=1,help='Run with weighted regression')
 argParse.add_argument('-aifText',action='store_const',const=1,help='AIF is a simple 2 column file with sample times and decay corrected activity')
@@ -53,10 +54,10 @@ argParse.add_argument('-interp',action='store_const',const=1,help='Interpolate A
 args = argParse.parse_args()
 
 #Setup bounds and inits
-wbBounds = [[0.2,-60],[5,60]]; wbInit = [1,0]
+woBounds = [[0.1,0.1,-60],[10,10,60]]; wbInit = [1,1,0]
 
 #Loop through bounds
-uBounds = [args.bBound,args.dBound]
+uBounds = [args.oBound,args.tBound,args.dBound]
 for bIdx in range(len(uBounds)):
 
 	#Make sure bounds make sense
@@ -67,8 +68,8 @@ for bIdx in range(len(uBounds)):
 			sys.exit()
 
 		#If they do, use them
-		wbBounds[0][bIdx] = bound[0]
-		wbBounds[1][bIdx] = bound[1]
+		woBounds[0][bIdx] = bound[0]
+		woBounds[1][bIdx] = bound[1]
 
 		#Make sure initlization is within bounds
 		if wbInit[bIdx] < bound[0] or wbInit[bIdx] > bound[1]:
@@ -294,7 +295,7 @@ else:
 	aifFunc = interp.interp1d(drawTime,corrCounts,fill_value='extrapolate')
 
 	#Label for future plot
-	aifLabel = "Interpolated
+	aifLabel = 'Interpolated'
 
 #Get interpolation times as start to end of pet scan with aif sampling rate
 sampTime = np.min(np.diff(np.sort(drawTime)))
@@ -321,10 +322,10 @@ else:
 for wbIdx in range(wbIter):
 
 	#Arguments for whole-brain model fit
-	wbArgs = (aifFunc,interpTime,wbTac,petTime,vbWb,args.pen[0],1,weights)
+	wbArgs = (aifFunc,interpTime,wbTac,petTime,vbWb,args.pen[0],[1,1],weights)
 
 	#Attempt to fit model to whole-brain curve
-	wbFit = opt.minimize(nagini.fdgDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
+	wbFit = opt.minimize(nagini.fdgFourDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(woBounds).T,options={'maxls':100})
 
 	#Make sure we converged
 	if wbFit.success is False:
@@ -333,7 +334,7 @@ for wbIdx in range(wbIter):
 
 	#Get estimated coefficients and fit
 	wbOpt = wbFit.x
-	wbFitted,wbCoef = nagini.fdgDelayLstPen(wbOpt,aifFunc,interpTime,wbTac,petTime,vbWb,args.pen[0],1,weights,coefs=True)
+	wbFitted,wbCoef = nagini.fdgFourDelayLstPen(wbOpt,aifFunc,interpTime,wbTac,petTime,vbWb,args.pen[0],[1,1],weights,coefs=True)
 
 	#Recompute weights if necessary
 	if wbIter !=1 and wbIdx != (wbIter - 1):
@@ -348,24 +349,23 @@ for wbIdx in range(wbIter):
 
 #Use coefficents to calculate all my parameters
 if args.cbf is None:
-	wbParams = nagini.fdgCalc(wbCoef,args.blood,args.dT,args.lc[0])
+	wbParams = nagini.fdgFourCalc(wbCoef,args.blood,args.dT,args.lc[0])
 else:
 	#Get mean flow
 	flowWb = np.mean(flowMasked)
-	wbParams = nagini.fdgCalc(wbCoef,args.blood,args.dT,args.lc[0],flow=flowWb,vb=vbWb)
+	wbParams = nagini.fdgFourCalc(wbCoef,args.blood,args.dT,args.lc[0],flow=flowWb,vb=vbWb)
 
 #Create string for whole-brain parameter estimates
-labels = ['kOne','kTwo','kThree','cmrGlu',
-          'alphaOne','alphaTwo','betaOne',
-          'influx','DV','conc','delay',
-          'kI']
-values = [wbParams[0],wbParams[1],wbParams[2],wbParams[3],
-          wbCoef[0],wbCoef[1],wbCoef[2],
-          wbParams[4],wbParams[5],wbParams[6],wbOpt[1]/60.0,
+labels = ['kOne','kTwo','kThree','kFour','cmrGlu',
+          'alphaOne','alphaTwo','betaOne','betaTwo',
+	  'influx','DV','conc','delay','kI']
+values = [wbParams[0],wbParams[1],wbParams[2],wbParams[3],wbParams[4],
+          wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],
+	  wbParams[5],wbParams[6],wbParams[7],wbOpt[2]/60.0,
           (wbParams[0]*wbParams[2])/(wbParams[1]+wbParams[2])]
-units = ['mLBlood/mLTissue/min','1/min','1/min','uMol/hg/min',
-         '1/sec','1/sec','mLBlood/mLTissue/sec',
-         'uMol/g/min','mLBlood/mLTissue','uMol/g','min',
+units = ['mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min',
+         '-','-','-','-',
+	 'uMol/g/min','mLBlood/mLTissue','uMol/g','min',
          'mLBlood/mLTissue/min']
 
 #Add in labels if we have cbf
@@ -413,8 +413,8 @@ try:
 	axTwo.set_title('Arterial Sampled Input function')
 
 	#Interpolate input function and correct for delay
-	cAif = aifFunc(drawTime+wbOpt[1])
-	cAif *= np.exp(np.log(2)/6586.26*wbOpt[1])
+	cAif = aifFunc(drawTime+wbOpt[2])
+	cAif *= np.exp(np.log(2)/6586.26*wbOpt[2])
 
 	#Add shifted plot
 	axTwo.plot(drawTime,cAif,linewidth=5,c='green',label='Delay Corrected')
@@ -442,7 +442,7 @@ nParam = wbOpt.shape[0]-1
 roiInit = np.copy(wbOpt[0:nParam])
 
 #Set default region bounds
-lBounds = []; hBounds = []; bScale = [3]
+lBounds = []; hBounds = []; bScale = [3,3]
 for pIdx in range(nParam):
 	if wbOpt[pIdx] > 0:
 		lBounds.append(wbOpt[pIdx]/bScale[pIdx])
@@ -469,9 +469,9 @@ if args.noVox != 1:
 	voxParams = np.zeros((roiMasked.shape[0],nParam+nMeas)); voxParams[:] = np.nan
 
 #Interpolate input function using delay
-wbAif = aifFunc(interpTime+wbOpt[1]) * np.exp(np.log(2)/1220.04*wbOpt[1])
-wbAifStart = aifFunc(petTime[:,0]+wbOpt[1]) * np.exp(np.log(2)/1220.04*wbOpt[1])
-wbAifEnd =  aifFunc(petTime[:,1]+wbOpt[1]) * np.exp(np.log(2)/1220.04*wbOpt[1])
+wbAif = aifFunc(interpTime+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+wbAifStart = aifFunc(petTime[:,0]+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+wbAifEnd =  aifFunc(petTime[:,1]+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
 
 #Get interpolated AIF integrated from start to end of pet times
 wbAifPet = (wbAifStart+wbAifEnd)/2.0
@@ -497,20 +497,20 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 	try:
 		#Run fit
-		roiArgs = (interpTime,pAif,roiTac,petTime,cOneRoi,args.roiPen[0],wbOpt[0],weights)
-		roiOpt = opt.minimize(nagini.fdgLstPen,roiInit,args=roiArgs,method='L-BFGS-B',bounds=roiBounds,options={'maxls':100})
+		roiArgs = (interpTime,pAif,roiTac,petTime,cOneRoi,args.roiPen[0],wbOpt[0:2],weights)
+		roiOpt = opt.minimize(nagini.fdgFourLstPen,roiInit,args=roiArgs,method='L-BFGS-B',bounds=roiBounds,options={'maxls':100})
 
 		#Extract coefficients
-		roiFitted,roiCoef = nagini.fdgLstPen(roiOpt.x,interpTime,pAif,roiTac,petTime,cOneRoi,args.roiPen[0],wbOpt[0],weights,coefs=True)
+		roiFitted,roiCoef = nagini.fdgFourLstPen(roiOpt.x,interpTime,pAif,roiTac,petTime,cOneRoi,args.roiPen[0],wbOpt[0:2],weights,coefs=True)
 
 		#Save coefficients
-		roiParams[roiIdx,0:3] = roiCoef
+		roiParams[roiIdx,0:4] = roiCoef
 
 		#Caculate roi metabolic parameter values
 		if args.cbf is None:
-			roiParams[roiIdx,3:10] = nagini.fdgCalc(roiCoef,args.blood,args.dT,args.lc[0])
+			roiParams[roiIdx,4:12] = nagini.fdgFourCalc(roiCoef,args.blood,args.dT,args.lc[0])
 		else:
-			roiParams[roiIdx,3:12] =  nagini.fdgCalc(roiCoef,args.blood,args.dT,args.lc[0],vb=roiVbMean,flow=np.mean(flowMasked[roiMask]))
+			roiParams[roiIdx,4:14] =  nagini.fdgFourCalc(roiCoef,args.blood,args.dT,args.lc[0],vb=roiVbMean,flow=np.mean(flowMasked[roiMask]))
 
 		#Calculate residual
 		roiResid = roiTac - roiFitted
@@ -540,7 +540,7 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 		roiC += 1
 
 	#Set bounds for voxel
-	lBounds = []; hBounds = []; bScale = [2]
+	lBounds = []; hBounds = []; bScale = [2,2]
 	for pIdx in range(nParam):
 		if wbOpt[pIdx] > 0:
 			lBounds.append(voxInit[pIdx]/bScale[pIdx])
@@ -565,20 +565,20 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 		try:
 			#Run fit
-			voxArgs = (interpTime,pAif,voxTac,petTime,cOneVox,args.voxPen[0],voxInit[0],weights)
-			voxOpt = opt.minimize(nagini.fdgLstPen,voxInit,args=voxArgs,method='L-BFGS-B',bounds=voxBounds,options={'maxls':100})
+			voxArgs = (interpTime,pAif,voxTac,petTime,cOneVox,args.voxPen[0],voxInit[0:2],weights)
+			voxOpt = opt.minimize(nagini.fdgFourLstPen,voxInit,args=voxArgs,method='L-BFGS-B',bounds=voxBounds,options={'maxls':100})
 
 			#Extract coefficients
-			voxFitted,voxCoef = nagini.fdgLstPen(voxOpt.x,interpTime,pAif,voxTac,petTime,cOneVox,args.voxPen[0],voxInit[0],weights,coefs=True)
+			voxFitted,voxCoef = nagini.fdgFourLstPen(voxOpt.x,interpTime,pAif,voxTac,petTime,cOneVox,args.voxPen[0],voxInit[0:2],weights,coefs=True)
 
 			#Save coefficients
 			roiVoxParams[voxIdx,0:3] = voxCoef
 
 			#Caculate roi metabolic parameter values
 			if args.cbf is None:
-				roiVoxParams[voxIdx,3:10] = nagini.fdgCalc(voxCoef,args.blood,args.dT,args.lc[0])
+				roiVoxParams[voxIdx,4:12] = nagini.fdgFourCalc(voxCoef,args.blood,args.dT,args.lc[0])
 			else:
-				roiVoxParams[voxIdx,3:12] =  nagini.fdgCalc(voxCoef,args.blood,args.dT,args.lc[0],vb=voxVb,flow=flowMasked[roiMask][voxIdx])
+				roiVoxParams[voxIdx,4:14] =  nagini.fdgFourCalc(voxCoef,args.blood,args.dT,args.lc[0],vb=voxVb,flow=flowMasked[roiMask][voxIdx])
 
 			#Calculate residual
 			voxResid = voxTac - voxFitted
@@ -610,7 +610,7 @@ if args.noVox !=1:
 	if args.noFill != 1 and voxC > 0:
 
 		#Loop through parameters that we need to replace the nans
-		for cIdx in range(0,3):
+		for cIdx in range(0,4):
 
 			#Extract coefficinet data
 			cData = voxData[:,:,:,cIdx]
@@ -654,7 +654,7 @@ if args.noVox !=1:
 
 		#Calculate parameter values for replaced values
 		if args.cbf is None:
-			paramReplace = nagini.fdgCalc(coefReplace,args.blood,args.dT,args.lc[0])
+			paramReplace = nagini.fdgFourCalc(coefReplace,args.blood,args.dT,args.lc[0])
 		else:
 
 			#Get flow values needed for replacement
@@ -666,7 +666,7 @@ if args.noVox !=1:
 			vbReplace = vbData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2]].flatten()
 
 			#Get values fore replacement
-			paramReplace = nagini.fdgCalc(voxCoef,args.blood,args.dT,args.lc[0],vb=vbReplace,flow=flowReplace)
+			paramReplace = nagini.fdgFourCalc(voxCoef,args.blood,args.dT,args.lc[0],vb=vbReplace,flow=flowReplace)
 
 		#Apply replaced values
 		voxData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2],4:14] = paramReplace
@@ -678,9 +678,9 @@ print('Writing out results...')
 
 #Set names for model images
 if args.cbf is None:
-	paramNames = ['alphaOne','alphaTwo','betaOne','kOne','kTwo','kThree','cmrGlu','influx','DV','conc','nRmsd']
+	paramNames = ['alphaOne','alphaTwo','betaOne','betaTwo','kOne','kTwo','kThree','kFour','cmrGlu','influx','DV','conc','nRmsd']
 else:
-	paramNames = ['alphaOne','alphaTwo','betaOne','kOne','kTwo','kThree','cmrGlu','influx','DV','conc','fef','netEx','nRmsd']
+	paramNames = ['alphaOne','alphaTwo','betaOne','betaTwo','kOne','kTwo','kThree','kFour','cmrGlu','influx','DV','conc','fef','netEx','nRmsd']
 
 #Do the writing for parameters
 for iIdx in range(roiParams.shape[1]-1):

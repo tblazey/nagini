@@ -48,6 +48,7 @@ argParse.add_argument('-oBound',nargs=2,type=float,metavar=('lower', 'upper'),he
 argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for beta two, where bounds are 0.00016*[lower,upper]. Defalt is [0.2,5]')
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for delay parameter. Default is [-25,25]')
 argParse.add_argument('-weighted',action='store_const',const=1,help='Run with weighted regression')
+argParse.add_argument('-interp',action='store_const',const=1,help='Interpolate AIF instead of fitting model')
 args = argParse.parse_args()
 
 #Setup bounds and inits
@@ -206,44 +207,65 @@ corrCounts /= (args.pie[0] * 0.06 )
 #########################
 ###Data Pre-Processing###
 #########################
-print 'Fitting AIF...'
 
-#Run piecwise fit to start the initialization process for AIF fitting
-maxIdx = np.argmax(corrCounts)
-tRight = drawTime[maxIdx:]; cRight = np.log(corrCounts[maxIdx:])
-initOpt,initCov = opt.curve_fit(nagini.segModel,tRight,cRight,[10,0.1,0.01,-0.01,-0.001,-0.0001])
+#AIF fitting logic
+if args.interp is None:
 
-#Save params for initialization
-aTwo = np.exp(initOpt[1]); aThree = np.exp(initOpt[2])
-eTwo = initOpt[4]; eThree = initOpt[5]
+	#Update user
+	print 'Fitting AIF...'
 
-#Get tau coefficient
-tMax= drawTime[np.argmax(corrCounts)]
-grad = np.gradient(corrCounts,drawTime)
-tau = drawTime[np.argmax(grad)-1]
-if tau >= tMax:
-	tau = 0
+	#Run piecwise fit to start the initialization process for AIF fitting
+	maxIdx = np.argmax(corrCounts)
+	tRight = drawTime[maxIdx:]; cRight = np.log(corrCounts[maxIdx:])
+	initOpt,initCov = opt.curve_fit(nagini.segModel,tRight,cRight,[10,0.1,0.01,-0.01,-0.001,-0.0001])
 
-#Get inits for first component
-aOne = ((np.max(corrCounts)-aTwo-aThree)*np.exp(1) + aTwo+aThree)/(tMax-tau)
-eOne = -1 / ( (tMax-tau) - (aTwo+aThree)/aOne)
+	#Save params for initialization
+	aTwo = np.exp(initOpt[1]); aThree = np.exp(initOpt[2])
+	eTwo = initOpt[4]; eThree = initOpt[5]
 
-#Setup bounds and inits
-inits = [np.min((np.max((0,tau)),60)),aOne,aTwo,aThree,eOne,eTwo,eThree]; lBound = [0]; hBound = [60]
-for pIdx in range(1,len(inits)):
-	if inits[pIdx] > 0:
-		lBound.append(inits[pIdx]/5.0)
-		hBound.append(inits[pIdx]*5.0)
-	else:
-		lBound.append(inits[pIdx]*5.0)
-		hBound.append(inits[pIdx]/5.0)
-bounds = [lBound,hBound]
+	#Get tau coefficient
+	tMax= drawTime[np.argmax(corrCounts)]
+	grad = np.gradient(corrCounts,drawTime)
+	tau = drawTime[np.argmax(grad)-1]
+	if tau >= tMax:
+		tau = 0
 
-#Run fit
-aifFit,aifCov =  opt.curve_fit(nagini.fengModel,drawTime,corrCounts,inits,bounds=bounds)
+	#Get inits for first component
+	aOne = ((np.max(corrCounts)-aTwo-aThree)*np.exp(1) + aTwo+aThree)/(tMax-tau)
+	eOne = -1 / ( (tMax-tau) - (aTwo+aThree)/aOne)
 
-#Run global optimization
-aifGlobal = opt.basinhopping(nagini.fengModelGlobal,aifFit,minimizer_kwargs={'args':(drawTime,corrCounts),'bounds':np.array(bounds).T})
+	#Setup bounds and inits
+	inits = [np.min((np.max((0,tau)),60)),aOne,aTwo,aThree,eOne,eTwo,eThree]; lBound = [0]; hBound = [60]
+	for pIdx in range(1,len(inits)):
+		if inits[pIdx] > 0:
+			lBound.append(inits[pIdx]/5.0)
+			hBound.append(inits[pIdx]*5.0)
+		else:
+			lBound.append(inits[pIdx]*5.0)
+			hBound.append(inits[pIdx]/5.0)
+	bounds = [lBound,hBound]
+
+	#Run fit
+	aifFit,aifCov =  opt.curve_fit(nagini.fengModel,drawTime,corrCounts,inits,bounds=bounds)
+
+	#Run global optimization
+	aifGlobal = opt.basinhopping(nagini.fengModelGlobal,aifFit,minimizer_kwargs={'args':(drawTime,corrCounts),'bounds':np.array(bounds).T})
+
+	#Get function for interpolating AIF
+	aifFunc = nagini.fengFunc(aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
+	                          aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],
+							  aifGlobal.x[6])
+
+	#Label for future plot
+	aifLabel = "Model Fit"
+
+else:
+
+	#Just do a straight up linear interpolation
+	aifFunc = interp.interp1d(drawTime,corrCounts,fill_value='extrapolate')
+
+	#Label for future plot
+	aifLabel = 'Interpolated'
 
 #Get interpolation times as start to end of pet scan with aif sampling rate
 sampTime = np.min(np.diff(np.sort(drawTime)))
@@ -270,7 +292,7 @@ else:
 for wbIdx in range(wbIter):
 
 	#Arguments for whole-brain model fit
-	wbArgs = (aifGlobal.x,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights)
+	wbArgs = (aifFunc,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights)
 
 	#Attempt to fit model to whole-brain curve
 	wbFit = opt.minimize(nagini.gluDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
@@ -282,7 +304,7 @@ for wbIdx in range(wbIter):
 
 	#Get estimated coefficients and fit
 	wbOpt = wbFit.x
-	wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifGlobal.x,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights,coefs=True)
+	wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifFunc,interpTime,wbTac,petTime,flowWb,vbWb,args.pen[0],1,weights,coefs=True)
 
 	#Recompute weights if necessary
 	if wbIter !=1 and wbIdx != (wbIter - 1):
@@ -339,16 +361,14 @@ try:
 	#Make input function plot
 	axTwo = plt.subplot(gs[0,1])
 	axTwo.scatter(drawTime,corrCounts,s=40,c="black")
-	aifFitted = nagini.fengModel(drawTime,aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-				     aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
-	axTwo.plot(drawTime,aifFitted,linewidth=5,label='Spline Fit')
+	aifFitted = aifFunc(drawTime)
+	axTwo.plot(drawTime,aifFitted,linewidth=5,label=aifLabel)
 	axTwo.set_xlabel('Time (seconds)')
 	axTwo.set_ylabel('Counts')
 	axTwo.set_title('Arterial Sampled Input function')
 
 	#Interpolate input function and correct for delay
-	cAif = nagini.fengModel(drawTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-				aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6])
+	cAif = aifFunc(drawTime+wbOpt[2])
 	cAif *= np.exp(np.log(2)/1220.04*wbOpt[2])
 
 	#Add shifted plot
@@ -372,7 +392,7 @@ if args.noRoi == 1:
 	nagini.writeArgs(args,args.out[0])
 	sys.exit()
 
-#Get number of parameters for roi/voxel optmization
+#Get number of parameters for roi/voxel optimization
 nParam = wbOpt.shape[0]-1
 roiInit = np.copy(wbOpt[0:nParam])
 
@@ -398,12 +418,9 @@ if args.noVox != 1:
 	voxParams = np.zeros((roiMasked.shape[0],nParam+13)); voxParams[:] = np.nan
 
 #Interpolate input function using delay
-wbAif = nagini.fengModel(interpTime+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-			 aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
-wbAifStart = nagini.fengModel(petTime[:,0]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-			      aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
-wbAifEnd =  nagini.fengModel(petTime[:,1]+wbOpt[2],aifGlobal.x[0],aifGlobal.x[1],aifGlobal.x[2],
-			     aifGlobal.x[3],aifGlobal.x[4],aifGlobal.x[5],aifGlobal.x[6]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+wbAif = aifFunc(interpTime+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+wbAifStart = aifFunc(petTime[:,0]+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+wbAifEnd =  aifFunc(petTime[:,1]+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
 
 #Get interpolated AIF integrated from start to end of pet times
 wbAifPet = (wbAifStart+wbAifEnd)/2.0
@@ -465,7 +482,7 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 	#Create data structure for voxels within roiOpt
 	nVox = roiVoxels.shape[0]
-	roiVoxParams = np.zeros((nVox,nParam+13))
+	roiVoxParams = np.zeros((nVox,roiParams.shape[1]))
 
 	#If region optimization was a success use it for voxel
 	if roiOpt.success is True:

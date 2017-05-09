@@ -1687,7 +1687,7 @@ def gluAifLst(aifTime,pAif,pet,cOne,flow):
 	#Return function
 	return gluPred
 
-def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,flow,vb,pen,penC,weights,coefs=False):
+def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,coefs=False):
 
 	"""
 
@@ -1698,8 +1698,8 @@ def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 	   3x1 vector of paramters.
 	aifTime: array
 	   A n length array of times to samples AIF at
-	aifCoef: array
-	   A 7x1 array of coefficients for Feng Model AIF
+	aifFunc: function
+	   Function for interoplating AIF
 	pet: array
 	   A m length array of pet data
 	petTime: array
@@ -1739,8 +1739,7 @@ def gluDelayLstPen(params,aifCoef,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 	delta = params[2]
 
 	#Get delay corrected input function
-	wbAif = fengModel(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],
-	                 aifCoef[5],aifCoef[6])
+	wbAif = aifFunc(aifTime+delta)
 
 	#Correct input function for decay during delay
 	wbAif *= np.exp(np.log(2)/1220.04*delta)
@@ -1968,6 +1967,73 @@ def golishModelDeriv(t,cMax,cZero,alpha,beta,tZero,tau):
 
 	return golishDeriv
 
+def fengFunc(tau,aOne,aTwo,aThree,eOne,eTwo,eThree):
+
+	"""
+
+	Produces a function that will interpolate AIF per Feng AIF model 1993
+
+	Parameters
+	----------
+
+	tau: float
+		tau parameter
+	aOne: float
+		aOne parameter
+	aTwo: float
+		aTwo parameter
+	aThree: float
+		aThree parameter
+	eOne: float
+		eOne parameter
+	eTwo: float
+		eTwo parameter
+	eThree: float
+		eThree parameter
+
+	Returns
+	-------
+	fengInterp: function
+		Function that will interpolate AIF given a vector of timepoints
+
+	"""
+
+	def fengInterp(t):
+
+		"""
+
+		Produces a function that will interpolate AIF per Feng AIF model 1993
+
+		Parameters
+		----------
+
+		time: array
+			Array of time points to interpolate AIF at
+
+		Returns
+		-------
+		fengPred: array
+			Array of interpolate AIF points
+
+		"""
+
+		#Get components
+		one = (aOne*(t-tau)-aTwo-aThree)*np.exp(eOne*(t-tau))
+		two = aTwo*np.exp(eTwo*(t-tau))
+		three = aThree*np.exp(eThree*(t-tau))
+
+		#Get sum
+		fengPred = one+two+three
+
+		#Set points where t is less than tau to zero
+		fengPred[t<tau] = 0.0
+
+		#Return predictions
+		return fengPred
+
+	#Return interpolation function
+	return fengInterp
+
 def fengModel(t,tau,aOne,aTwo,aThree,eOne,eTwo,eThree):
 
 	"""
@@ -2003,16 +2069,11 @@ def fengModel(t,tau,aOne,aTwo,aThree,eOne,eTwo,eThree):
 
 	"""
 
-	#Get components
-	one = (aOne*(t-tau)-aTwo-aThree)*np.exp(eOne*(t-tau))
-	two = aTwo*np.exp(eTwo*(t-tau))
-	three = aThree*np.exp(eThree*(t-tau))
+	#Get function for interpolation
+	predFunc = fengFunc(tau,aOne,aTwo,aThree,eOne,eTwo,eThree)
 
-	#Get sum
-	fengPred = one+two+three
-
-	#Set points where t is less than tau to zero
-	fengPred[t<tau] = 0.0
+	#Get predicted values
+	fengPred = predFunc(t)
 
 	return fengPred
 
@@ -2100,7 +2161,7 @@ def segModel(t,iOne,iTwo,iThree,sOne,sTwo,sThree,bOne=100,bTwo=1000):
 
 	return segPred
 
-def fdgDelayLstPen(param,aifCoef,aifTime,pet,petTime,vb,pen,penC,weights,coefs=False):
+def fdgDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,coefs=False):
 
 	"""
 
@@ -2109,8 +2170,8 @@ def fdgDelayLstPen(param,aifCoef,aifTime,pet,petTime,vb,pen,penC,weights,coefs=F
 
 	param: array
 		A 2 x 1 array of model parameters
-	aifCoef: array
-	   An array of coefficients for Feng Model
+	aifFunc: function
+	   Function that interpolates AIF given a vector of sample times
 	aifTime: array
 	   A n length array of times to samples AIF at
 	pet: array
@@ -2119,34 +2180,34 @@ def fdgDelayLstPen(param,aifCoef,aifTime,pet,petTime,vb,pen,penC,weights,coefs=F
 	   A m length array of pet sample times
 	vb: float
 	   Fractional blood volume. In mL-blood/mL-tissue
-    pen: float
-       The penalty for least squares optimization
-    penC: float
-       Value at which penalty = 0
-    coefs: logical
-       If true, returns predictions and coefficients
-    weights: array
-       A m length array of weights for pet data
+        pen: float
+           The penalty for least squares optimization
+        penC: float
+           Value at which penalty = 0
+        coefs: logical
+           If true, returns predictions and coefficients
+        weights: array
+           A m length array of weights for pet data
 
-    Returns
-    -------
-    If coefs = False
+        Returns
+        -------
+        If coefs = False
 	   SSE: float
 		   Sum of squares error with penalty
-    If coefs = True:
+        If coefs = True:
 	   petPred: array
 		   An m length array of PET predictions
 	   coefs: array
 		   A 3x1 array of coefficients
 
-    """
+        """
 
 	#Scale beta parameter
-	b1 *= param[0] * 0.0038
+	b1 = params[0] * 0.0038
+	delta = params[1]
 
 	#Get delay corrected input function
-	wbAif = fengModel(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],
-		              aifCoef[5],aifCoef[6])
+	wbAif = aifFunc(aifTime+delta)
 
 	#Correct input function for decay during delay
 	wbAif *= np.exp(np.log(2)/6586.26*delta)
@@ -2159,7 +2220,7 @@ def fdgDelayLstPen(param,aifCoef,aifTime,pet,petTime,vb,pen,penC,weights,coefs=F
 	cOnePet = (cOneInterp(petTime[:,0])+cOneInterp(petTime[:,1]))/2.0
 
 	#Convert AIF to plasma
-	pAif = (1.10857 + -1.10954E-5*aifTime)*wbAif
+	pAif = (1.071966 + -1.07294E-5*aifTime)*wbAif
 
 	#Compute first basis function
 	bfOne = np.convolve(pAif,np.exp(-b1*aifTime))[0:aifTime.shape[0]]
@@ -2193,7 +2254,7 @@ def fdgDelayLstPen(param,aifCoef,aifTime,pet,petTime,vb,pen,penC,weights,coefs=F
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1])
 
-def fdgDelayLstPen(param,aifCoef,pAif,pet,petTime,cOne,pen,penC,weights,coefs=False):
+def fdgFourDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,coefs=False):
 
 	"""
 
@@ -2201,7 +2262,104 @@ def fdgDelayLstPen(param,aifCoef,pAif,pet,petTime,cOne,pen,penC,weights,coefs=Fa
 	----------
 
 	param: array
-		A 2 x 1 array of model parameters
+		A 3 x 1 array of model parameters
+	aifFunc: function
+	   Function that interpolates AIF given a vector of tiem samples
+	aifTime: array
+	   A n length array of times to samples AIF at
+	pet: array
+	   A m length array of pet data
+	petTime: array
+	   A m length array of pet sample times
+	vb: float
+	   Fractional blood volume. In mL-blood/mL-tissue
+        pen: float
+           The penalty for least squares optimization
+        penC: array
+           2 x 1 array of values at which penalty equals zero
+        coefs: logical
+           If true, returns predictions and coefficients
+        weights: array
+           A m length array of weights for pet data
+
+        Returns
+        -------
+        If coefs = False
+	   SSE: float
+		   Sum of squares error with penalty
+        If coefs = True:
+	   petPred: array
+		   An m length array of PET predictions
+	   coefs: array
+		   A 3x1 array of coefficients
+
+        """
+
+	#Scale beta parameter
+	b1 = params[0] * 5.88E-5
+	b2 = params[1] * 0.0038
+	delta = params[2]
+
+	#Get delay corrected input function
+	wbAif = aifFunc(aifTime+delta)
+
+	#Correct input function for decay during delay
+	wbAif *= np.exp(np.log(2)/6586.26*delta)
+
+	#Calculate concentration in compartment one
+	cOne = vb*wbAif
+
+	#Interpolate compartment one
+	cOneInterp = interp.interp1d(aifTime,cOne,kind='linear')
+	cOnePet = (cOneInterp(petTime[:,0])+cOneInterp(petTime[:,1]))/2.0
+
+	#Convert AIF to plasma
+	pAif = (1.071966 + -1.07294E-5*aifTime)*wbAif
+
+	#Compute first basis function
+	bfOne = np.convolve(pAif,np.exp(-b1*aifTime)-np.exp(-b2*aifTime))[0:aifTime.shape[0]]
+
+	#Interpolate first basis function
+	aifStep = aifTime[1]-aifTime[0]
+	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
+	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+
+	#Compute second basis function
+	bfTwo = np.convolve(pAif,b2*np.exp(-b2*aifTime)-b1*np.exp(-b1*aifTime))[0:aifTime.shape[0]]
+
+	#Interpolate second basis function
+	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
+	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+
+	#Construct weight matrix
+	W = np.diag(weights)
+
+	#Compute the alphas using linear least squares
+	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
+	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(pet-cOnePet))
+
+	#Calculate model prediction
+	petPred = cOnePet + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
+	petResid = pet - petPred
+
+	#Return weighted penalized sum of sqaures or predictions/coefficients
+	if coefs is False:
+
+		#Calculate penalty
+		betaPen = np.power(np.log(penC[0]/params[0]),2) + np.power(np.log(penC[1]/params[1]),2)
+		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*betaPen
+	else:
+		return petPred,np.array([alpha[0],alpha[1],b1,b2])
+
+def fdgLstPen(param,aifTime,pAif,pet,petTime,cOne,pen,penC,weights,coefs=False):
+
+	"""
+
+	Parameters
+	----------
+
+	param: float
+		Nonlinear parameter (k2+k3)
 	aifTime: array
 	   A n length array of times to samples AIF at
 	pAif: array:
@@ -2212,31 +2370,31 @@ def fdgDelayLstPen(param,aifCoef,pAif,pet,petTime,cOne,pen,penC,weights,coefs=Fa
 	   A m length array of pet sample times
 	cOne: array
 	   A m length array of concentraiton in compartment 1
-    pen: float
-       The penalty for least squares optimization
-    penC: float
-       Value at which penalty = 0
-    weights: array
-       A m length array of weights for pet data
-    coefs: logical
-       If true, returns predictions and coefficients
+        pen: float
+           The penalty for least squares optimization
+        penC: float
+           Value at which penalty = 0
+        weights: array
+           A m length array of weights for pet data
+        coefs: logical
+           If true, returns predictions and coefficients
 
 
-    Returns
-    -------
-    If coefs = False
+       Returns
+       -------
+       If coefs = False
 	   SSE: float
 		   Sum of squares error with penalty
-    If coefs = True:
+       If coefs = True:
 	   petPred: array
 		   An m length array of PET predictions
 	   coefs: array
 		   A 3x1 array of coefficients
 
-    """
+       """
 
 	#Scale beta parameter
-	b1 *= param[0] * 0.0038
+	b1 = param[0] * 0.0038
 
 	#Compute first basis function
 	bfOne = np.convolve(pAif,np.exp(-b1*aifTime))[0:aifTime.shape[0]]
@@ -2258,7 +2416,7 @@ def fdgDelayLstPen(param,aifCoef,pAif,pet,petTime,cOne,pen,penC,weights,coefs=Fa
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
-	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(pet-cOnePet))
+	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(pet-cOne))
 
 	#Calculate model prediction
 	petPred = cOne + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
@@ -2266,9 +2424,90 @@ def fdgDelayLstPen(param,aifCoef,pAif,pet,petTime,cOne,pen,penC,weights,coefs=Fa
 
 	#Return weighted penalized sum of sqaures or predictions/coefficients
 	if coefs is False:
-		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*np.power(np.log(penC/params[0]),2)
+		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*np.power(np.log(penC/param[0]),2)
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1])
+
+def fdgFourLstPen(params,aifTime,pAif,pet,petTime,cOne,pen,penC,weights,coefs=False):
+
+	"""
+
+	Parameters
+	----------
+
+	param: array
+		A 3 x 1 array of model parameters
+	aifTime: array
+	   A n length array of times to samples AIF at
+    pAif : array
+	   A n length array of plasma AIF samples
+	pet: array
+	   A m length array of pet data
+	petTime: array
+	   A m length array of pet sample times
+	cOne: float
+	   Concentration in pet compartment one
+    pen: float
+       The penalty for least squares optimization
+    penC: array
+       2 x 1 array of values at which penalty equals zero
+    coefs: logical
+       If true, returns predictions and coefficients
+    weights: array
+       A m length array of weights for pet data
+
+    Returns
+    -------
+    If coefs = False
+	   SSE: float
+		   Sum of squares error with penalty
+    If coefs = True:
+	   petPred: array
+		   An m length array of PET predictions
+	   coefs: array
+		   A 3x1 array of coefficients
+
+    """
+
+	#Scale beta parameter
+	b1 = params[0] * 5.88E-5
+	b2 = params[1] * 0.0038
+
+	#Compute first basis function
+	bfOne = np.convolve(pAif,np.exp(-b1*aifTime)-np.exp(-b2*aifTime))[0:aifTime.shape[0]]
+
+	#Interpolate first basis function
+	aifStep = aifTime[1]-aifTime[0]
+	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
+	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+
+	#Compute second basis function
+	bfTwo = np.convolve(pAif,b2*np.exp(-b2*aifTime)-b1*np.exp(-b1*aifTime))[0:aifTime.shape[0]]
+
+	#Interpolate second basis function
+	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
+	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+
+	#Construct weight matrix
+	W = np.diag(weights)
+
+	#Compute the alphas using linear least squares
+	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
+	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(pet-cOne))
+
+	#Calculate model prediction
+	petPred = cOne + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
+	petResid = pet - petPred
+
+	#Return weighted penalized sum of sqaures or predictions/coefficients
+	if coefs is False:
+
+		#Calculate penalty
+		betaPen = np.power(np.log(penC[0]/params[0]),2) + np.power(np.log(penC[1]/params[1]),2)
+		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*betaPen
+	else:
+		return petPred,np.array([alpha[0],alpha[1],b1,b2])
+
 
 def gluCalc(coefs,flow,vb,blood,dT):
 
@@ -2369,7 +2608,7 @@ def fdgCalc(coefs,blood,dT,lc,vb=None,flow=None):
     -------
 
 	fdgParams: array
-		If flow and vb are set, returns a 9x1 or nx1 array, else a 8x1 or nx1 array
+		If flow and vb are set, returns a 9x1 or nx1 array, else a 7x1 or nx1 array
 
 	"""
 
@@ -2387,7 +2626,7 @@ def fdgCalc(coefs,blood,dT,lc,vb=None,flow=None):
 
 	#Calculate rate constants from coefficients
 	kOne = aOne
-	kThree = aTwo*betaOne/aOne
+	kThree = aTwo*bOne/aOne
 	kTwo = bOne-kThree
 
 	#Calculate metabolic rate
@@ -2417,6 +2656,87 @@ def fdgCalc(coefs,blood,dT,lc,vb=None,flow=None):
 		fdgParams = np.stack((kOne*60.0,kTwo*60.0,kThree*60.0,cmrGlu,fdgIn,distVol,fdgConc,fef,netEx),axis=sAxis)
 	else:
 		fdgParams = np.stack((kOne*60.0,kTwo*60.0,kThree*60.0,cmrGlu,fdgIn,distVol,fdgConc),axis=sAxis)
+
+	#Return parameter estimates
+	return fdgParams
+
+def fdgFourCalc(coefs,blood,dT,lc,vb=None,flow=None):
+
+	"""
+
+	Caculates metabolic parameters from fdg fitting coefficients
+
+	Parameters
+	----------
+
+	coefs: array
+		A 4 or nx1 array of coefficients from 4 rate constant fdg model
+	blood: float
+	   	Blood glucose contraction in mg/dL
+	dT: float
+		Density of tissue in g/mL
+	lc: float
+	  	Lumped constant
+	vb: array
+		A 1 or a nx1 array of fractional blood volumes in mlT/mlB
+	flow: array
+		A 1 or a nx1 array of blood flow values in 1/secs
+
+	Returns
+    -------
+
+	fdgParams: array
+		If flow and vb are set, returns a 10x1 or nx10 array, else a 8x1 or nx8 array
+
+	"""
+
+	#Seperate out coeffients
+	if coefs.ndim == 1:
+		aOne = coefs[0]
+		aTwo = coefs[1]
+		bOne = coefs[2]
+		bTwo = coefs[3]
+		sAxis = 0
+	else:
+		aOne = coefs[:,0]
+		aTwo = coefs[:,1]
+		bOne = coefs[:,2]
+		bTwo = coefs[:,3]
+		sAxis = 1
+
+	#Calculate rate constants from coefficients
+	kOne = aTwo * (bTwo-bOne)
+	kTwo = bTwo + bOne - (aOne/aTwo)
+	kFour = bTwo * bOne / kTwo
+	kThree = bTwo + bOne - kTwo - kFour
+
+	#Calculate metabolic rate
+	gluScale = 333.0449 / dT
+	cmrGlu = (kOne*kThree) / (kTwo+kThree) * blood * gluScale / lc
+
+	#Calculate influx
+	fdgIn = kOne*blood*gluScale/100.0
+
+	#Calculate distrubtion volume (AKA free glucose)
+	distVol =  kOne/(kTwo+kThree)*dT
+
+	#Compute tissue concentration
+	fdgConc = distVol * blood * 0.05550748
+
+	#Additional parameters if flow and cbv are supplied
+	if flow is not None and cbv is not None:
+
+		#Calculate glucose extraction fraction
+		fef = kOne / (flow*vb)
+
+		#Calculate net extraction
+		netEx = (kOne*kThree) / (kTwo+kThree) / (flow*vb)
+
+	#Combine all the calculated parameters
+	if flow is not None and cbv is not None:
+		fdgParams = np.stack((kOne*60.0,kTwo*60.0,kThree*60.0,kFour*60.0,cmrGlu,fdgIn,distVol,fdgConc,fef,netEx),axis=sAxis)
+	else:
+		fdgParams = np.stack((kOne*60.0,kTwo*60.0,kThree*60.0,kFour*60.0,cmrGlu,fdgIn,distVol,fdgConc),axis=sAxis)
 
 	#Return parameter estimates
 	return fdgParams
