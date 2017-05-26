@@ -275,7 +275,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 
 	#Mask pet data now
 	petTacM = petTac[petMask]
-	petTimeM = petTime[petMask,:]
+	petTimeM = petTime[petMask]
 
 	"""
 
@@ -291,7 +291,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 	petTac: array
 		An m length array containing PET time activity Curve
 	petTime: array
-		An n x 2 array containing PET start times and end times
+		An n x 2 array containing PET sample times
 	petMask: logical array
 		An m length array containing useable points (those where we have AIF samples)
 
@@ -343,14 +343,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 		flowConv *= (aifTime[1]-aifTime[0])
 
 		#Get interpolation function for model predictions
-		predInterp = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")
-
-		#Interpolate predicted response at start and end times
-		startPred = predInterp(petTimeM[:,0])
-		endPred = predInterp(petTimeM[:,1])
-
-		#Calculate average between start and end time. Implies average after trap. integration
-		petPred = (startPred+endPred)/2
+		petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTimeM)
 
 		#Return sum of squares error
 		if pred is True:
@@ -379,7 +372,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 	petTac: array
 		An m length array containing PET data
 	petTime: array
-		An m x 2 array containing PET start and stop times
+		An m x 1 array containing pet sample times
 
 	Returns
 	-------
@@ -432,8 +425,8 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		#Calculate Aif
 		cAif = golishModel(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5])
 
-		#Correct AIF for decay during shift and rescale
-		cAif *= np.exp(np.log(2)/122.24*delta)* aifScale
+		#Scale AIF
+		cAif *= aifScale
 
 		#Make valid AIF mask
 		aifMask = (aifTime+delta)<=aifTime[-1]
@@ -448,16 +441,12 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		predInterp = interp.interp1d(aifTimeM,flowConv,kind="linear")
 
 		#Get PET points where we have AIF data
-		petMask = np.logical_and(petTime[:,0]>=aifTimeM[0],petTime[:,1]<=aifTimeM[-1])
-		petTimeM = petTime[petMask,:]
+		petMask = np.logical_and(petTime>=aifTimeM[0],petTime<=aifTimeM[-1])
+		petTimeM = petTime[petMask]
 		petTacM = petTac[petMask]
 
-		#Interpolate predicted response at start and end times
-		startPred = predInterp(petTimeM[:,0])
-		endPred = predInterp(petTimeM[:,1])
-
-		#Calculate average between start and end time. Implies trap. integration
-		petPred = (startPred+endPred)/2
+		#Get predicted response at pet times
+		petPred = predInterp(petTimeM)
 
 		#Return sum of squares error
 		if pred is True:
@@ -485,7 +474,7 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 	petTac: array
 		An m length array containing PET data
 	petTime: array
-		An m x 2 array containing PET start and stop times
+		An m x 1 array containing PET sample times
 
 	Returns
 	-------
@@ -541,8 +530,8 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		#Correct for disperison
 		cAif += golishModelDeriv(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5]) * tau
 
-		#Correct AIF for decay during shift and rescale
-		cAif *= np.exp(np.log(2)/122.24*delta) * aifScale
+		#Scale AIF
+		cAif *= aifScale
 
 		#Make valid AIF mask
 		aifMask = (aifTime+delta)<=aifTime[-1]
@@ -550,29 +539,21 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		cAifM = cAif[aifMask]
 
 		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAifM,np.exp(-(flow/lmbda)*aifTimeM))[0:aifTimeM.shape[0]]
+		flowConv = np.convolve(flow*cAifM,np.exp(-((flow/lmbda)+decayC)*aifTimeM))[0:aifTimeM.shape[0]]
 		flowConv *= (aifTimeM[1]-aifTimeM[0])
 
 		#Get PET points where we have AIF data
-		petMask = np.logical_and(petTime[:,0]>=aifTimeM[0],petTime[:,1]<=aifTimeM[-1])
-		petTimeM = petTime[petMask,:]
+		petMask = np.logical_and(petTime>=aifTimeM[0],petTime<=aifTimeM[-1])
+		petTimeM = petTime[petMask]
 		petTacM = petTac[petMask]
 
 		#Get interpolation function for model predictions
-		predInterp = interp.interp1d(aifTimeM,flowConv,kind="linear")
-
-		#Interpolate predicted response at start and end times
-		startPred = predInterp(petTimeM[:,0])
-		endPred = predInterp(petTimeM[:,1])
-
-		#Calculate average between start and end time. Implies averaged after trap. integration
-		petPred = (startPred+endPred)/2
+		petPred = interp.interp1d(aifTimeM,flowConv,kind="linear")(petTimeM)
 
 		#Return weighted sum of squares residuals or predictions
 		if pred is True:
 			return petPred,petMask,aifMask
 		else:
-
 			return np.sum(weights[petMask]*np.power(petPred-petTacM,2))
 
 	#Return function
@@ -1007,7 +988,7 @@ def rSplineBasis(X,knots,dot=False,dDot=False):
 	----------
 	X : array
 	   A array of length n containing the x-values for cubic spline basis
-	knots: array
+	knots: arraytest_args.txt
 	   An array of length p containing knot locations
 	dot: logical
 	   If true returns derivative of spline
@@ -1703,7 +1684,7 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 	pet: array
 	   A m length array of pet data
 	petTime: array
-	   A m x 2 array of PET start and end times
+	   A m x 1 array of PET sample times
 	cOne: array
 	   An m length array with concentration in compartment one
 	flow: float
@@ -1741,15 +1722,11 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 	#Get delay corrected input function
 	wbAif = aifFunc(aifTime+delta)
 
-	#Correct input function for decay during delay
-	wbAif *= np.exp(np.log(2)/1220.04*delta)
-
 	#Calculate concentration in compartment one
 	cOne = vb*wbAif
 
 	#Interpolate compartment one
-	cOneInterp = interp.interp1d(aifTime,cOne,kind='linear')
-	cOnePet = (cOneInterp(petTime[:,0])+cOneInterp(petTime[:,1]))/2.0
+	cOnePet = interp.interp1d(aifTime,cOne,kind='linear')(petTime)
 
 	#Convert AIF to plasma
 	pAif = wbAif*(1.19 + -0.002*aifTime/60.0)
@@ -1762,8 +1739,7 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 
 	#Interpolate first basis function
 	aifStep = aifTime[1]-aifTime[0]
-	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
-	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+	bfOnePet = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')(petTime)
 
 	#Compute second basis function
 	bfTwo = np.convolve(pAif,np.exp(-b2*aifTime)/(b1-b2) +
@@ -1771,11 +1747,10 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 							 np.exp(-flow*aifTime)*b2/((b1-flow)*(b2-flow)))[0:aifTime.shape[0]]
 
 	#Interpolate second basis function
-	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
-	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+	bfTwoPet = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')(petTime)
 
 	#Construct weight matrix
-	W = np.diag(weights)
+	W = np.diag(np.sqrt(weights))
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
@@ -1807,7 +1782,7 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coef
 	pet: array
 	   A m length array of pet data
 	petTime: array
-	   A m x 2 array of PET start and end times
+	   A m x 1 array of PET start and end times
 	cOne: array
 	   An m length array with concentration in compartment one
 	flow: float
@@ -1843,8 +1818,7 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coef
 
 	#Interpolate first basis function
 	aifStep = aifTime[1]-aifTime[0]
-	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
-	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+	bfOnePet = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')(petTime)
 
 	#Compute second basis function
 	bfTwo = np.convolve(pAif,np.exp(-b2*aifTime)/(b1-b2) +
@@ -1852,14 +1826,13 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coef
 							   np.exp(-flow*aifTime)*b2/((b1-flow)*(b2-flow)))[0:aifTime.shape[0]]
 
 	#Interpolate second basis function
-	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
-	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+	bfTwoPet = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')(petTime)
 
 	#Remove vascular component from tac
 	petC = pet - cOne
 
 	#Construct weight matrix
-	W = np.diag(weights)
+	W = np.diag(np.sqrt(weights))
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
@@ -2180,21 +2153,21 @@ def fdgDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,coefs=
 	   A m length array of pet sample times
 	vb: float
 	   Fractional blood volume. In mL-blood/mL-tissue
-        pen: float
-           The penalty for least squares optimization
-        penC: float
-           Value at which penalty = 0
-        coefs: logical
-           If true, returns predictions and coefficients
-        weights: array
-           A m length array of weights for pet data
+    pen: float
+		The penalty for least squares optimization
+    penC: float
+        Value at which penalty = 0
+    coefs: logical
+        If true, returns predictions and coefficients
+    weights: array
+        A m length array of weights for pet data
 
-        Returns
-        -------
-        If coefs = False
+    Returns
+    -------
+    If coefs = False
 	   SSE: float
 		   Sum of squares error with penalty
-        If coefs = True:
+    If coefs = True:
 	   petPred: array
 		   An m length array of PET predictions
 	   coefs: array
@@ -2216,8 +2189,7 @@ def fdgDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,coefs=
 	cOne = vb*wbAif
 
 	#Interpolate compartment one
-	cOneInterp = interp.interp1d(aifTime,cOne,kind='linear')
-	cOnePet = (cOneInterp(petTime[:,0])+cOneInterp(petTime[:,1]))/2.0
+	cOnePet = interp.interp1d(aifTime,cOne,kind='linear')(petTime)
 
 	#Convert AIF to plasma
 	pAif = (1.071966 + -1.07294E-5*aifTime)*wbAif
@@ -2227,18 +2199,16 @@ def fdgDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,coefs=
 
 	#Interpolate first basis function
 	aifStep = aifTime[1]-aifTime[0]
-	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
-	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+	bfOnePet = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')(petTime)
 
 	#Compute second basis function
 	bfTwo = np.convolve(pAif,1.0-np.exp(-b1*aifTime))[0:aifTime.shape[0]]
 
 	#Interpolate second basis function
-	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
-	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+	bfTwoPet = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')(petTime)
 
 	#Construct weight matrix
-	W = np.diag(weights)
+	W = np.diag(np.sqrt(weights))
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
@@ -2262,9 +2232,9 @@ def fdgFourDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,co
 	----------
 
 	param: array
-		A 3 x 1 array of model parameters
+		A 4 x 1 array of model parameters
 	aifFunc: function
-	   Function that interpolates AIF given a vector of tiem samples
+	   Function that interpolates AIF given a vector of time samples
 	aifTime: array
 	   A n length array of times to samples AIF at
 	pet: array
@@ -2273,27 +2243,27 @@ def fdgFourDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,co
 	   A m length array of pet sample times
 	vb: float
 	   Fractional blood volume. In mL-blood/mL-tissue
-        pen: float
-           The penalty for least squares optimization
-        penC: array
-           2 x 1 array of values at which penalty equals zero
-        coefs: logical
-           If true, returns predictions and coefficients
-        weights: array
-           A m length array of weights for pet data
+    pen: float
+       The penalty for least squares optimization
+    penC: array
+       2 x 1 array of values at which penalty equals zero
+    coefs: logical
+       If true, returns predictions and coefficients
+    weights: array
+       A m length array of weights for pet data
 
-        Returns
-        -------
-        If coefs = False
-	   SSE: float
-		   Sum of squares error with penalty
-        If coefs = True:
-	   petPred: array
-		   An m length array of PET predictions
-	   coefs: array
-		   A 3x1 array of coefficients
+    Returns
+    -------
+    If coefs = False
+   		SSE: float
+	   		Sum of squares error with penalty
+    If coefs = True:
+   		petPred: array
+	   		An m length array of PET predictions
+   		coefs: array
+	   		A 4x1 array of coefficients
 
-        """
+    """
 
 	#Scale beta parameter
 	b1 = params[0] * 5.88E-5
@@ -2303,15 +2273,11 @@ def fdgFourDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,co
 	#Get delay corrected input function
 	wbAif = aifFunc(aifTime+delta)
 
-	#Correct input function for decay during delay
-	wbAif *= np.exp(np.log(2)/6586.26*delta)
-
 	#Calculate concentration in compartment one
 	cOne = vb*wbAif
 
 	#Interpolate compartment one
-	cOneInterp = interp.interp1d(aifTime,cOne,kind='linear')
-	cOnePet = (cOneInterp(petTime[:,0])+cOneInterp(petTime[:,1]))/2.0
+	cOnePet = interp.interp1d(aifTime,cOne,kind='linear')(petTime)
 
 	#Convert AIF to plasma
 	pAif = (1.071966 + -1.07294E-5*aifTime)*wbAif
@@ -2321,18 +2287,16 @@ def fdgFourDelayLstPen(params,aifFunc,aifTime,pet,petTime,vb,pen,penC,weights,co
 
 	#Interpolate first basis function
 	aifStep = aifTime[1]-aifTime[0]
-	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
-	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+	bfOnePet = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')(petTime)
 
 	#Compute second basis function
 	bfTwo = np.convolve(pAif,b2*np.exp(-b2*aifTime)-b1*np.exp(-b1*aifTime))[0:aifTime.shape[0]]
 
 	#Interpolate second basis function
-	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
-	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+	bfTwoPet = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')(petTime)
 
 	#Construct weight matrix
-	W = np.diag(weights)
+	W = np.diag(np.sqrt(weights))
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
@@ -2370,28 +2334,28 @@ def fdgLstPen(param,aifTime,pAif,pet,petTime,cOne,pen,penC,weights,coefs=False):
 	   A m length array of pet sample times
 	cOne: array
 	   A m length array of concentraiton in compartment 1
-        pen: float
-           The penalty for least squares optimization
-        penC: float
-           Value at which penalty = 0
-        weights: array
-           A m length array of weights for pet data
-        coefs: logical
-           If true, returns predictions and coefficients
+    pen: float
+       The penalty for least squares optimization
+    penC: float
+       Value at which penalty = 0
+    weights: array
+       A m length array of weights for pet data
+    coefs: logical
+       If true, returns predictions and coefficients
 
 
-       Returns
-       -------
-       If coefs = False
-	   SSE: float
-		   Sum of squares error with penalty
-       If coefs = True:
-	   petPred: array
-		   An m length array of PET predictions
-	   coefs: array
-		   A 3x1 array of coefficients
+   Returns
+   -------
+   If coefs = False
+   	SSE: float
+	   Sum of squares error with penalty
+   If coefs = True:
+   	petPred: array
+	   An m length array of PET predictions
+   	coefs: array
+	   A 3x1 array of coefficients
 
-       """
+   """
 
 	#Scale beta parameter
 	b1 = param[0] * 0.0038
@@ -2401,18 +2365,16 @@ def fdgLstPen(param,aifTime,pAif,pet,petTime,cOne,pen,penC,weights,coefs=False):
 
 	#Interpolate first basis function
 	aifStep = aifTime[1]-aifTime[0]
-	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
-	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+	bfOnePet = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')(petTime)
 
 	#Compute second basis function
 	bfTwo = np.convolve(pAif,1.0-np.exp(-b1*aifTime))[0:aifTime.shape[0]]
 
 	#Interpolate second basis function
-	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
-	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+	bfTwoPet = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')(petTime)
 
 	#Construct weight matrix
-	W = np.diag(weights)
+	W = np.diag(np.sqrt(weights))
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
@@ -2478,18 +2440,16 @@ def fdgFourLstPen(params,aifTime,pAif,pet,petTime,cOne,pen,penC,weights,coefs=Fa
 
 	#Interpolate first basis function
 	aifStep = aifTime[1]-aifTime[0]
-	bfOneInterp = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')
-	bfOnePet = (bfOneInterp(petTime[:,0])+bfOneInterp(petTime[:,1]))/2.0
+	bfOnePet = interp.interp1d(aifTime,bfOne*aifStep,kind='linear')(petTime)
 
 	#Compute second basis function
 	bfTwo = np.convolve(pAif,b2*np.exp(-b2*aifTime)-b1*np.exp(-b1*aifTime))[0:aifTime.shape[0]]
 
 	#Interpolate second basis function
-	bfTwoInterp = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')
-	bfTwoPet = (bfTwoInterp(petTime[:,0])+bfTwoInterp(petTime[:,1]))/2.0
+	bfTwoPet = interp.interp1d(aifTime,bfTwo*aifStep,kind='linear')(petTime)
 
 	#Construct weight matrix
-	W = np.diag(weights)
+	W = np.diag(np.sqrt(weights))
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)

@@ -27,7 +27,7 @@ roiData = roi.get_data()
 if len(valData.shape) == 4:
 	valData = nagini.reshape4d(valData)
 else:
-	valData = valData.reshape((val.shape[0]*val.shape[1]*val.shape[2],1))
+	valData = valData.reshape((val.shape[0],1))
 roiData = roiData.flatten()
 
 #Sample into ROIs

@@ -7,7 +7,7 @@
 
 """
 
-gluAif.py: Calculates cmrGlu using a FDG scan and an arterial sampled input function
+fdgFourAifRidge.py: Calculates cmrGlu using a FDG scan and an arterial sampled input function
 
 Requires the following modules:
 	argparse, numpy, nibabel, nagini, tqdm, scipy, matplotlib
@@ -50,11 +50,17 @@ argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower', 'upper'),he
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for delay parameter. Default is [-25,25]')
 argParse.add_argument('-weighted',action='store_const',const=1,help='Run with weighted regression')
 argParse.add_argument('-aifText',action='store_const',const=1,help='AIF is a simple 2 column file with sample times and decay corrected activity')
+argParse.add_argument('-idaif',action='store_const',const=1,help='AIF is an image derived input function (1 column file with activity)')
 argParse.add_argument('-interp',action='store_const',const=1,help='Interpolate AIF instead of fitting model')
+argParse.add_argument('-noDelay',action='store_const',const=1,help='Do not estimate delay in AIF')
 args = argParse.parse_args()
 
 #Setup bounds and inits
-woBounds = [[0.1,0.1,-60],[10,10,60]]; wbInit = [1,1,0]
+if args.noDelay is None:
+	wbBounds = [[0.1,0.1,-60],[10,10,60]]
+else:
+	wbBounds = [[0.1,0.1,0],[10,10,0]]
+wbInit = [1,1,0]
 
 #Loop through bounds
 uBounds = [args.oBound,args.tBound,args.dBound]
@@ -68,8 +74,8 @@ for bIdx in range(len(uBounds)):
 			sys.exit()
 
 		#If they do, use them
-		woBounds[0][bIdx] = bound[0]
-		woBounds[1][bIdx] = bound[1]
+		wbBounds[0][bIdx] = bound[0]
+		wbBounds[1][bIdx] = bound[1]
 
 		#Make sure initlization is within bounds
 		if wbInit[bIdx] < bound[0] or wbInit[bIdx] > bound[1]:
@@ -92,8 +98,13 @@ print ('Loading images...')
 #Load in the info file
 info = nagini.loadInfo(args.info[0])
 
+#Get pet start and end times. Assume start of first recorded frame is injection (has an offset which is subtracted out)
+startTime = info[:,0] - info[0,0]
+midTime = info[:,1] - info[0,0]
+endTime = info[:,2] + startTime
+
 #AIF loading logic
-if args.aifText is None:
+if args.aifText is None and args.idaif is None:
 
 	#Load dta file
 	dta = nagini.loadDta(args.dta[0])
@@ -103,6 +114,14 @@ if args.aifText is None:
 
 	#Apply pie factor and scale factor to AIF
 	corrCounts /= (args.pie[0] * 0.06 )
+
+elif args.idaif == 1:
+
+	#Load in idaif
+	corrCounts = np.loadtxt(args.dta[0])
+
+	#Get time variable
+	drawTime = np.copy(midTime)
 
 else:
 
@@ -226,14 +245,6 @@ if args.cbf is not None:
 petMasked = nagini.reshape4d(petData)[maskData.flatten()>0,:]
 roiMasked = roiData[maskData>0].flatten()
 
-#Get pet start and end times. Assume start of first recorded frame is injection (has an offset which is subtracted out)
-startTime = info[:,0] - info[0,0]
-midTime = info[:,1] - info[0,0]
-endTime = info[:,2] + startTime
-
-#Combine PET start and end times into one array
-petTime = np.stack((startTime,endTime),axis=1)
-
 #########################
 ###Data Pre-Processing###
 #########################
@@ -292,7 +303,7 @@ if args.interp is None:
 else:
 
 	#Just do a straight up linear interpolation
-	aifFunc = interp.interp1d(drawTime,corrCounts,fill_value='extrapolate')
+	aifFunc = interp.PchipInterpolator(drawTime,corrCounts,extrapolate=True)
 
 	#Label for future plot
 	aifLabel = 'Interpolated'
@@ -303,49 +314,33 @@ interpTime = np.arange(np.floor(startTime[0]),np.ceil(endTime[-1]+sampTime),samp
 
 #Get whole-brain tac
 wbTac = np.mean(petMasked,axis=0)
-
-#Construct initial weights
-weights = np.ones_like(wbTac)
-
+print vbWb
 ###################
 ###Model Fitting###
 ###################
 print ('Beginning fitting procedure...')
 
-#Set number of iterations based upon whether or not we are going to use weights
+#Use either uniform or John Lee Jeffery style weights
 if args.weighted is None:
-	wbIter = 1
+	weights = np.ones_like(wbTac)
 else:
-	wbIter = 5
+	weights = 1.0 / (midTime*np.log(midTime[-1]/midTime[0]))
+	weights /= np.sum(weights*info[:,2])
 
-#Loop through whole-brain fitting iterations
-for wbIdx in range(wbIter):
+#Arguments for whole-brain model fit
+wbArgs = (aifFunc,interpTime,wbTac,midTime,vbWb,args.pen[0],[1,1],weights)
 
-	#Arguments for whole-brain model fit
-	wbArgs = (aifFunc,interpTime,wbTac,petTime,vbWb,args.pen[0],[1,1],weights)
+#Attempt to fit model to whole-brain curve
+wbFit = opt.minimize(nagini.fdgFourDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
 
-	#Attempt to fit model to whole-brain curve
-	wbFit = opt.minimize(nagini.fdgFourDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(woBounds).T,options={'maxls':100})
+#Make sure we converged
+if wbFit.success is False:
+	print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
+	sys.exit()
 
-	#Make sure we converged
-	if wbFit.success is False:
-		print 'ERROR: Cannot estimate model on whole-brain curve. Exiting...'
-		sys.exit()
-
-	#Get estimated coefficients and fit
-	wbOpt = wbFit.x
-	wbFitted,wbCoef = nagini.fdgFourDelayLstPen(wbOpt,aifFunc,interpTime,wbTac,petTime,vbWb,args.pen[0],[1,1],weights,coefs=True)
-
-	#Recompute weights if necessary
-	if wbIter !=1 and wbIdx != (wbIter - 1):
-
-		#Calculate median absolute deviation
-		wbResid = wbTac - wbFitted
-		wbMad = np.median(np.abs(wbResid-np.median(wbResid))) / 0.6745
-
-		#Create weights using Huber weight function
-		wbU = np.abs(wbResid / wbMad); wbU[wbU<=1.345] = 1.345
-		weights = 1.345 / wbU
+#Get estimated coefficients and fit
+wbOpt = wbFit.x
+wbFitted,wbCoef = nagini.fdgFourDelayLstPen(wbOpt,aifFunc,interpTime,wbTac,midTime,vbWb,args.pen[0],[1,1],weights,coefs=True)
 
 #Use coefficents to calculate all my parameters
 if args.cbf is None:
@@ -413,11 +408,10 @@ try:
 	axTwo.set_title('Arterial Sampled Input function')
 
 	#Interpolate input function and correct for delay
-	cAif = aifFunc(drawTime+wbOpt[2])
-	cAif *= np.exp(np.log(2)/6586.26*wbOpt[2])
+	cAif = aifFunc(interpTime+wbOpt[2])
 
 	#Add shifted plot
-	axTwo.plot(drawTime,cAif,linewidth=5,c='green',label='Delay Corrected')
+	axTwo.plot(interpTime,cAif,linewidth=5,c='green',label='Delay Corrected')
 
 	#Make sure we have legend for input function plot
 	axTwo.legend(loc='upper right')
@@ -469,12 +463,14 @@ if args.noVox != 1:
 	voxParams = np.zeros((roiMasked.shape[0],nParam+nMeas)); voxParams[:] = np.nan
 
 #Interpolate input function using delay
-wbAif = aifFunc(interpTime+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
-wbAifStart = aifFunc(petTime[:,0]+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
-wbAifEnd =  aifFunc(petTime[:,1]+wbOpt[2]) * np.exp(np.log(2)/1220.04*wbOpt[2])
+if args.noDelay is None:
+	shift = 0
+else:
+	shift = wbOpt[2]
+wbAif = aifFunc(interpTime+shift)
 
-#Get interpolated AIF integrated from start to end of pet times
-wbAifPet = (wbAifStart+wbAifEnd)/2.0
+#Get interpolated AIF at pet middle time
+wbAifPet = aifFunc(midTime+shift)
 
 #Convert AIF to plasma
 pAif = (1.071966 + -1.07294E-5*interpTime)*wbAif
@@ -497,11 +493,11 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 	try:
 		#Run fit
-		roiArgs = (interpTime,pAif,roiTac,petTime,cOneRoi,args.roiPen[0],wbOpt[0:2],weights)
+		roiArgs = (interpTime,pAif,roiTac,midTime,cOneRoi,args.roiPen[0],wbOpt[0:2],weights)
 		roiOpt = opt.minimize(nagini.fdgFourLstPen,roiInit,args=roiArgs,method='L-BFGS-B',bounds=roiBounds,options={'maxls':100})
 
 		#Extract coefficients
-		roiFitted,roiCoef = nagini.fdgFourLstPen(roiOpt.x,interpTime,pAif,roiTac,petTime,cOneRoi,args.roiPen[0],wbOpt[0:2],weights,coefs=True)
+		roiFitted,roiCoef = nagini.fdgFourLstPen(roiOpt.x,interpTime,pAif,roiTac,midTime,cOneRoi,args.roiPen[0],wbOpt[0:2],weights,coefs=True)
 
 		#Save coefficients
 		roiParams[roiIdx,0:4] = roiCoef
@@ -565,11 +561,11 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 		try:
 			#Run fit
-			voxArgs = (interpTime,pAif,voxTac,petTime,cOneVox,args.voxPen[0],voxInit[0:2],weights)
+			voxArgs = (interpTime,pAif,voxTac,midTime,cOneVox,args.voxPen[0],voxInit[0:2],weights)
 			voxOpt = opt.minimize(nagini.fdgFourLstPen,voxInit,args=voxArgs,method='L-BFGS-B',bounds=voxBounds,options={'maxls':100})
 
 			#Extract coefficients
-			voxFitted,voxCoef = nagini.fdgFourLstPen(voxOpt.x,interpTime,pAif,voxTac,petTime,cOneVox,args.voxPen[0],voxInit[0:2],weights,coefs=True)
+			voxFitted,voxCoef = nagini.fdgFourLstPen(voxOpt.x,interpTime,pAif,voxTac,midTime,cOneVox,args.voxPen[0],voxInit[0:2],weights,coefs=True)
 
 			#Save coefficients
 			roiVoxParams[voxIdx,0:3] = voxCoef

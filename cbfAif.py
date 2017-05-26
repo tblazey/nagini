@@ -1,4 +1,3 @@
-
 #!/usr/bin/python
 
 ###################
@@ -42,7 +41,7 @@ argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),he
 argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise lambda parameter. Default is 0 to 2.')
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise delay parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDelay is not.')
 argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise dispersion parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDisp is not.')
-argParse.add_argument('-weighted',action='store_const',const=1,help='Use weighted regression. Weights are determined by the whole-brain value')
+argParse.add_argument('-weighted',action='store_const',const=1,help='Use weighted regression using John Lee style weights.')
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -110,9 +109,6 @@ petMasked = nagini.reshape4d(petData)[brainData.flatten()>0,:]
 startTime = info[:,0] - info[0,0]
 midTime = info[:,1] - info[0,0]
 endTime = info[:,2] + startTime
-
-#Combine PET start and end times into one array
-petTime = np.stack((startTime,endTime),axis=1)
 
 #Get aif time variable. Assume clock starts at injection.
 aifTime = aif[:,0]
@@ -190,60 +186,43 @@ if args.noDelay == 1:
 	interpAif = nagini.golishModel(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*aifScale
 
 	#Get mask for useable PET data
-	wbPetMask = np.logical_and(petTime[:,0]>=interpTime[0],petTime[:,1]<=interpTime[-1])
+	wbPetMask = np.logical_and(midTime>=interpTime[0],midTime<=interpTime[-1])
 
 	#Model with just flow and lambda
-	wbFunc = nagini.flowTwo(interpTime,interpAif,decayC,wbTac,petTime,wbPetMask)
+	wbFunc = nagini.flowTwo(interpTime,interpAif,decayC,wbTac,midTime,wbPetMask)
 
 elif args.noDisp == 1:
 
 	#Model with just delay
-	wbFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC,wbTac,petTime)
+	wbFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC,wbTac,midTime)
 
 	#Add in starting point, bounds, and scale
 	wbInit.append(1); wbBounds = np.vstack((wbBounds,[-4,4])); wbScales = np.hstack((wbScales,[10]))
 else:
 
 	#Model with delay and dispersion:
-	wbFunc = nagini.flowFour(aifFit,aifScale,interpTime,decayC,wbTac,petTime)
+	wbFunc = nagini.flowFour(aifFit,aifScale,interpTime,decayC,wbTac,midTime)
 
 	#Add in starting points, bounds, and scales
 	wbInit.extend([1,1]); wbBounds = np.vstack((wbBounds,[-4,4],[0,5])); wbScales = np.hstack((wbScales,[10,5]))
 
-#Create intial weights
-weights = np.ones_like(wbTac)
-
 #Setup number of iterations for whole brain fitting
 if args.weighted is None:
-	wbIter = 1
+	weights = np.ones_like(wbTac)
 else:
-	wbIter = 5
+	weights = 1.0 / (midTime*np.log(midTime[-1]/midTime[0]))
+	weights /= np.sum(weights*info[:,2])
 
-#Loop through whole-brain fit
-for wbIdx in range(wbIter):
+#Attempt to fit model to whole-brain curve
+wbOpt = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.001,'maxls':100})
 
-	#Attempt to fit model to whole-brain curve
-	wbOpt = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.001,'maxls':100})
+#Make sure we converged before moving on
+if wbOpt.success is False:
+	print 'ERROR: Model did not converge on whole-brain curve. Exiting...'
+	sys.exit()
 
-	#Make sure we converged before moving on
-	if wbOpt.success is False:
-		print 'ERROR: Model did not converge on whole-brain curve. Exiting...'
-		sys.exit()
-
-	#Get whole-brian fitted values
-	wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,weights,pred=True)
-
-	#Recompute weights if necessary
-	if wbIter !=1 and wbIdx != (wbIter - 1):
-
-		#Calculate median absolute deviation
-		wbResid = wbTac[wbPetMask] - wbFitted	
-		wbMad = np.median(np.abs(wbResid-np.median(wbResid))) / 0.6745
-
-		#Create weights using Huber Weight Function
-		wbU = np.abs(wbResid / wbMad); wbU[wbU<=1.345] = 1.345
-		weights = np.zeros_like(wbTac)
-		weights[wbPetMask] = 1.345 / wbU		
+#Get whole-brian fitted values
+wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,weights,pred=True)
 
 #Remove optmization scales
 wbFit = wbOpt.x * wbScales
@@ -268,7 +247,7 @@ except(IOError):
 
 #Make aif mask if we need to
 if args.noDelay == 1:
-	wbAifMask = np.repeat(True,interpTime.shape)	
+	wbAifMask = np.repeat(True,interpTime.shape)
 
 #Create whole brain fit figure
 try:
@@ -308,8 +287,8 @@ try:
 		else:
 			lLabel = 'Delay Corrected'
 
-		#Correct input function for decay during shift
-		cAif *= np.exp(np.log(2)/122.24*wbFit[2])*aifScale
+		#Apply scale
+		cAif *= aifScale
 
 		#Create input function plot
 		axTwo.plot(interpTime[wbAifMask],cAif[wbAifMask],linewidth=5,c='green',label=lLabel)
@@ -340,11 +319,11 @@ bounds = np.stack((init[0:2]/3.0,init[0:2]*3.0)).T
 if args.fModel == 1:
 	for pIdx in range(2,nParam):
 		if init[pIdx] > 0:
-			bounds = np.vstack((bounds,[init[pIdx]/3.0,init[pIdx]*3.0]))	
+			bounds = np.vstack((bounds,[init[pIdx]/3.0,init[pIdx]*3.0]))
 		elif init[pIdx] < 0:
-			bounds = np.vstack((bounds,[init[pIdx]*3.0,init[pIdx]/3.0]))	
+			bounds = np.vstack((bounds,[init[pIdx]*3.0,init[pIdx]/3.0]))
 		else:
-			bounds = np.vstack((bounds,wbBounds[pIdx]))	
+			bounds = np.vstack((bounds,wbBounds[pIdx]))
 
 #Create list of user bounds to check and set initlization
 if args.noDelay == 1 or args.fModel != 1:
@@ -383,8 +362,8 @@ if args.fModel != 1 and args.noDelay !=1:
 	if args.noDisp != 1:
 		voxAif += nagini.golishModelDeriv(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
 
-	#Correct for decay during shift and scale it
-	voxAif *= np.exp(np.log(2)/122.24*wbFit[2]) * aifScale
+	#Apply scale to AIF
+	voxAif *= aifScale
 elif args.noDelay == 1:
 	voxAif = interpAif
 
@@ -403,7 +382,7 @@ for voxIdx in tqdm(range(nVox)):
 		else:
 			optFunc = nagini.flowFour(aifCoefs,aifKnots,interpTime,decayC,voxCbv)
 	else:
-		optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],decayC,voxTac,petTime,wbPetMask)
+		optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],decayC,voxTac,midTime,wbPetMask)
 
 
 	try:
@@ -431,7 +410,7 @@ for voxIdx in tqdm(range(nVox)):
 			#Calculate residuals and mean of useable tac
 			voxResid = voxPred - voxTac[voxMask]
 			voxMean = np.mean(voxTac[voxMask])
-			
+
 		else:
 
 			#Get fitted values
@@ -468,5 +447,3 @@ for iIdx in range(fitParams.shape[1]):
 
 #Write out arguments
 nagini.writeArgs(args,args.out[0])
-
-

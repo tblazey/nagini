@@ -77,6 +77,7 @@ argParse.add_argument('-cbv',nargs=1,help='Estimate of CBV in mL/hg. If given, c
 argParse.add_argument('-cbf',nargs=1,help='Estimate of CBF in mL/hg/min. If given, estimates GEF.')
 argParse.add_argument('-omega',nargs=1,help='Ratio of FDG in whole brain and plasma for CBV correction. Default is 0.9',default=0.9)
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
+argParse.add_argument('-weighted',action='store_const',const=1,help='Use weighted least squares.')
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -174,12 +175,19 @@ else:
 	wbCbf = np.mean(cbfMasked)
 	wbFunc = nagini.gluThree(interpTime,aifTime,cbf=wbCbf)
 
+#Use either uniform or John Lee Jeffery style weights
+if args.weighted is None:
+	weights = np.ones_like(wbTac)
+else:
+	weights = 1.0 / (petTime*np.log(petTime[-1]/petTime[0]))
+	weights /= np.sum(weights*info[:,2])
+
 #Attempt to fit model to whole-brain curve
 try:
 	if args.cbf is None:
-		wbFit = opt.curve_fit(wbFunc,petTime,wbTac,p0=[0.001,0.001,0.001],bounds=([0,0,0],[1,1,1]))
+		wbFit = opt.curve_fit(wbFunc,petTime,wbTac,p0=[0.001,0.001,0.001],bounds=([0,0,0],[1,1,1]),sigma=weights)
 	else:
-		wbFit = opt.curve_fit(wbFunc,petTime,wbTac,p0=[0.2,0.001,0.001],bounds=([0,0,0],[1,1,1]))
+		wbFit = opt.curve_fit(wbFunc,petTime,wbTac,p0=[0.2,0.001,0.001],bounds=([0,0,0],[1,1,1]),sigma=weights)
 except(RuntimeError):
 	print 'ERROR: Cannot estimate three-parameter model on whole-brain curve. Exiting...'
 	sys.exit()
@@ -272,7 +280,7 @@ for voxIdx in tqdm(range(nVox)):
 		if args.cbf is None:
 
 			#Fit model with k1 estimate
-			voxFit = opt.curve_fit(wbFunc,petTime,voxTac,p0=init,bounds=bounds)
+			voxFit = opt.curve_fit(wbFunc,petTime,voxTac,p0=init,bounds=bounds,sigma=weights)
 
 			#Save parameter estimates.
 			fitParams[voxIdx,0:3] = voxFit[0]
@@ -294,7 +302,7 @@ for voxIdx in tqdm(range(nVox)):
 		else:
 			#Fit model with gef estimate
 			voxFunc = nagini.gluThree(interpTime,aifInterp,cbf=cbfMasked[voxIdx])
-			voxFit = opt.curve_fit(voxFunc,petTime,voxTac,p0=init,bounds=bounds)
+			voxFit = opt.curve_fit(voxFunc,petTime,voxTac,p0=init,bounds=bounds,sigma=weights)
 
 			#Save parameter estimates
 			fitParams[voxIdx,0:3] = voxFit[0]
