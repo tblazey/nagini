@@ -24,6 +24,7 @@ argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1
 argParse.add_argument('-scale',help='Scale image by specified amount',nargs=1,type=float)
 argParse.add_argument('-sci',help='Use scientific notation for colorbar labels',dest='useSci',action='store_true')
 argParse.add_argument('-custom',help='Custom color map RGB array. Overides -cmap',nargs='+',type=float) 
+argParse.add_argument('-cSize',help='Font size for colorbar title. Default is 9.0',default=[9.0],nargs=1,type=float)
 argParse.set_defaults(showMin=False,showMax=True,useSci=False)
 args = argParse.parse_args()
 
@@ -33,9 +34,13 @@ if args.thr is not None:
 		print 'Error: Minimum value of %f is not above maximum value of %f'%(args.thr[0],args.thr[1])
 		sys.exit()
 
+import matplotlib
+matplotlib.use('TkAgg')
+
 #Load in the libraries we will need
 import numpy as np, matplotlib as mpl, matplotlib.pyplot as plt, nibabel as nib, nagini, sys
 from matplotlib.colors import LinearSegmentedColormap
+
 
 #Change default math font
 mpl.rcParams['mathtext.default'] = 'regular'
@@ -188,7 +193,7 @@ axThree.set_position((0.56,0.09,axThreeP.width,axThreeP.height))
 axFour = plt.subplot(gs[3])
 cBar = mpl.colorbar.ColorbarBase(axFour,cmap=cMap,ticks=[0,1])
 if args.cTitle is not None:
-	cBar.set_label(r'$%s$'%(args.cTitle[0]),color='white',rotation='90',size=9,weight="bold",labelpad=-20)
+	cBar.set_label(r'$%s$'%(args.cTitle[0]),color='white',rotation='90',size=args.cSize[0],weight="bold",labelpad=-20)
 cBar.ax.set_position((0.775, 0.29, 0.025, 0.35))
 if args.useSci is True:
 	cBar.set_ticklabels(['%.2e'%(args.thr[0]),'%.1e'%(args.thr[1])])
