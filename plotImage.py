@@ -34,9 +34,6 @@ if args.thr is not None:
 		print 'Error: Minimum value of %f is not above maximum value of %f'%(args.thr[0],args.thr[1])
 		sys.exit()
 
-import matplotlib
-matplotlib.use('TkAgg')
-
 #Load in the libraries we will need
 import numpy as np, matplotlib as mpl, matplotlib.pyplot as plt, nibabel as nib, nagini, sys
 from matplotlib.colors import LinearSegmentedColormap
@@ -191,14 +188,15 @@ axThree.set_position((0.56,0.09,axThreeP.width,axThreeP.height))
 
 #Add in colorbar
 axFour = plt.subplot(gs[3])
-cBar = mpl.colorbar.ColorbarBase(axFour,cmap=cMap,ticks=[0,1])
+cBar = mpl.colorbar.ColorbarBase(axFour,cmap=cMap,ticks=[0,0.5,1])
 if args.cTitle is not None:
-	cBar.set_label(r'$%s$'%(args.cTitle[0]),color='white',rotation='90',size=args.cSize[0],weight="bold",labelpad=-20)
+	cBar.set_label(r'$%s$'%(args.cTitle[0]),color='white',rotation='90',size=args.cSize[0],weight="bold",labelpad=-65)
 cBar.ax.set_position((0.775, 0.29, 0.025, 0.35))
+midTick = (args.thr[1] - args.thr[0]) / 2.0 + args.thr[0]
 if args.useSci is True:
-	cBar.set_ticklabels(['%.2e'%(args.thr[0]),'%.1e'%(args.thr[1])])
+	cBar.set_ticklabels(['%.2e'%(args.thr[0]),'%.2e'%(midTick),'%.2e'%(args.thr[1])])
 else:
-	cBar.set_ticklabels([np.round(args.thr[0],2),np.round(args.thr[1],2)])
+	cBar.set_ticklabels([np.round(args.thr[0],2),np.round(midTick,2),np.round(args.thr[1],2)])
 for tick in cBar.ax.yaxis.get_major_ticks():
     tick.label2.set_color('white')
     tick.label2.set_weight('bold')

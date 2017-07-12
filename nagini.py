@@ -354,7 +354,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 	#Return function
 	return flowPred
 
-def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
+def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime,kernel=None):
 
 	"""
 
@@ -423,7 +423,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		delta = param[2] * 10
 
 		#Calculate Aif
-		cAif = golishModel(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5])
+		cAif = golishFunc()(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5])
 
 		#Scale AIF
 		cAif *= aifScale
@@ -458,6 +458,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 	return flowPred
 
 def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
+
 	"""
 
 	Parameters
@@ -472,9 +473,9 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 	decayC: float
 	   Decay constant for model. Set to 0 for no decay correction.
 	petTac: array
-		An m length array containing PET data
+		A m length array containing PET data
 	petTime: array
-		An m x 1 array containing PET sample times
+		A m x 1 array containing PET sample times
 
 	Returns
 	-------
@@ -525,10 +526,10 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		tau = param[3] * 5.0
 
 		#Calculate Aif
-		cAif = golishModel(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5])
+		cAif = golishFunc()(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5])
 
 		#Correct for disperison
-		cAif += golishModelDeriv(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5]) * tau
+		cAif += golishDerivFunc()(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5]) * tau
 
 		#Scale AIF
 		cAif *= aifScale
@@ -978,7 +979,7 @@ def tfceScore(stat,mask,E=0.5,H=2,dH=0.1):
 	tfceFull[mask>0] = tfceScore
 	return tfceFull
 
-def rSplineBasis(X,knots,dot=False,dDot=False):
+def rSplineBasis(X,knots,dot=False,dDot=False,norm=False):
 
 	"""
 
@@ -988,12 +989,14 @@ def rSplineBasis(X,knots,dot=False,dDot=False):
 	----------
 	X : array
 	   A array of length n containing the x-values for cubic spline basis
-	knots: arraytest_args.txt
+	knots: array
 	   An array of length p containing knot locations
 	dot: logical
 	   If true returns derivative of spline
 	dDot: logical
 	   If true returns integral of spline
+	norm: logical
+	   If true normalizes spline (see rcspline.eval norm=2 in R)
 
 	Returns
 	-------
@@ -1011,6 +1014,12 @@ def rSplineBasis(X,knots,dot=False,dDot=False):
 	if nKnots <= 2:
 		print 'Number of knots must be at least 3'
 		sys.exit()
+
+	#Get normalization factor
+	if norm is True:
+		normFactor = np.power(knots[-1] - knots[0],2)
+	else:
+		normFactor = 1
 
 	#Create array to store basis matrix
 	nPoints = X.shape[0]
@@ -1054,7 +1063,7 @@ def rSplineBasis(X,knots,dot=False,dDot=False):
 		termThree = np.maximum(0,np.power(X-knots[nKnots-1],3)) * threeScale
 
 		#Compute the basis function.
-		basis[:,knotIdx+2] =  termOne - termTwo + termThree
+		basis[:,knotIdx+2] =  ( termOne - termTwo + termThree ) / normFactor
 
 		#Figure out signs of basis functions if further calculations are necessary
 		if dot is True or dDot is True:
@@ -1067,14 +1076,14 @@ def rSplineBasis(X,knots,dot=False,dDot=False):
 			termOneD = np.power(X-knots[knotIdx],2) * 3.0 * signOne
 			termTwoD = np.power(X-knots[nKnots-2],2) * 3.0 * twoScale * signTwo
 			termThreeD = np.power(X-knots[nKnots-1],2) * 3.0 * threeScale * signThree
-			deriv[:,knotIdx+2] = termOneD - termTwoD + termThreeD
+			deriv[:,knotIdx+2] =  ( termOneD - termTwoD + termThreeD ) / normFactor
 
 		#Compute integral if necessary
 		if dDot is True:
 			termOneInt = np.power(X-knots[knotIdx],4) * 0.25 * signOne
 			termTwoInt = np.power(X-knots[nKnots-2],4) * 0.25 * twoScale * signTwo
 			termThreeInt = np.power(X-knots[nKnots-1],4) * 0.25 * threeScale * signThree
-			integ[:,knotIdx+2] = termOneInt - termTwoInt + termThreeInt
+			integ[:,knotIdx+2] = ( termOneInt - termTwoInt + termThreeInt ) / normFactor
 
 	#Return appropriate basis set
 	if dot is True and dDot is True:
@@ -1752,7 +1761,7 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 	#Construct weight matrix
 	W = np.diag(np.sqrt(weights))
 
-	#Compute the alphas using linear least squares
+	#Compute the alphas using linear least squares. Use ridge regression if necessary.
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
 	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(pet-cOnePet))
 
@@ -1760,7 +1769,7 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 	petPred = cOnePet + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
 	petResid = pet - petPred
 
-	#Return weighted penalized sum of sqaures or predictions/coefficients
+	#Return weighted penalized sum of squares or predictions/coefficients
 	if coefs is False:
 		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*np.power(np.log(penC/params[0]),2)
 	else:
@@ -1848,97 +1857,149 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coef
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1,b2])
 
-def golishModel(t,cMax,cZero,alpha,beta,tZero,tau):
+def golishFunc(kernel=None):
 
 	"""
 
-	Produces AIF model fit from Golish et al., 2001 Journal of Medicine
+	Produces function that will return model fit from Golish et al., 2001
 
 	Parameters
 	----------
 
-	t: array
-	   An array of n timepoints
-	cMax: float
-	   cMax parameter
-	cZero: array
-	   cZero parameter
-	alpha: float
-	   alpha parameter
-	beta: float
-	   beta parameter
-	tZero: float
-		tZero parameter
-	tau: float
-	   tau parameter
+	kernel: array
+	   Convolution kernel to apply to model predictions. Must have same temporal sampling as AIF.
 
 	Returns
 	-------
-	golishPred: array
-		An array of n predictions given parameters
+
+	golishModel: function
+
 
 	"""
 
-	#Compute gamma components
-	gOne = cMax*np.power((np.exp(1)/(alpha*beta))*(t-tZero),alpha)
-	gTwo = np.exp(-(t-tZero)/beta)
-	gTotal = gOne*gTwo
+	def golishModel(t,cMax,cZero,alpha,beta,tZero,tau):
 
-	#Compute recirculation term
-	rTotal = cZero*(1-np.exp(-(t-tZero)/tau))
+		"""
 
-	#Get sum
-	golishPred = gTotal + rTotal
+		Produces AIF model fit from Golish et al., 2001 Journal of Medicine
 
-	#Zero out anything before tZero
-	golishPred[t<tZero] = 0
+		Parameters
+		----------
 
-	return golishPred
+		t: array
+		   An array of n timepoints
+		cMax: float
+		   cMax parameter
+		cZero: array
+		   cZero parameter
+		alpha: float
+		   alpha parameter
+		beta: float
+		   beta parameter
+		tZero: float
+			tZero parameter
+		tau: float
+		   tau parameter
 
-def golishModelDeriv(t,cMax,cZero,alpha,beta,tZero,tau):
+		Returns
+		-------
+		golishPred: array
+			An array of n predictions given parameters
+
+		"""
+
+		#Compute gamma components
+		gOne = cMax*np.power((np.exp(1)/(alpha*beta))*(t-tZero),alpha)
+		gTwo = np.exp(-(t-tZero)/beta)
+		gTotal = gOne*gTwo
+
+		#Compute recirculation term
+		rTotal = cZero*(1-np.exp(-(t-tZero)/tau))
+
+		#Get sum
+		golishPred = gTotal + rTotal
+
+		#Zero out anything before tZero
+		golishPred[t<tZero] = 0
+
+		#Perform convolution if necessary
+		if kernel is None:
+			return golishPred
+		else:
+			return np.convolve(golishPred,kernel)[0:golishPred.shape[0]] * (t[1]-t[0])
+
+	return golishModel
+
+def golishDerivFunc(kernel=None):
 
 	"""
 
-	Produces temporal derivative of AIF model fit from Golish et al., 2001 Journal of Medicine
+	Produces function that will return derivative of model fit from Golish et al., 2001
 
 	Parameters
 	----------
 
-	t: array
-	   An array of n timepoints
-	cMax: float
-	   cMax parameter
-	cZero: array
-	   cZero parameter
-	alpha: float
-	   alpha parameter
-	beta: float
-	   beta parameter
-	tau: float
-	   tau parameter
+	kernel: array
+	   Convolution kernel to apply to model predictions. Must have same temporal sampling as AIF.
 
 	Returns
 	-------
-	golishDeriv: array
-		An array of n precicted derivatives given parameters
+
+	golishModelDeriv: function
+
 
 	"""
 
-	#Compute repeatable units
-	lC = cMax*np.exp(alpha+((tZero-t)/beta))/beta
-	rC = (t-tZero)/(alpha*beta)
+	def golishModelDeriv(t,cMax,cZero,alpha,beta,tZero,tau):
 
-	#Compute terms of derivative
-	tOne = lC*np.power(rC,alpha-1) - lC*np.power(rC,alpha)
-	tTwo = cZero*np.exp((tZero-t)/tau)/tau
+		"""
 
-	#Get sum
-	golishDeriv = tOne + tTwo
+		Produces temporal derivative of AIF model fit from Golish et al., 2001 Journal of Medicine
 
-	#Zero out anything before tZero
-	golishDeriv[t<tZero] = 0
+		Parameters
+		----------
 
-	return golishDeriv
+		t: array
+		   An array of n timepoints
+		cMax: float
+		   cMax parameter
+		cZero: array
+		   cZero parameter
+		alpha: float
+		   alpha parameter
+		beta: float
+		   beta parameter
+		tau: float
+		   tau parameter
+
+		Returns
+		-------
+		golishDeriv: array
+			An array of n precicted derivatives given parameters
+
+		"""
+
+		#Compute repeatable units
+		lC = cMax*np.exp(alpha+((tZero-t)/beta))/beta
+		rC = (t-tZero)/(alpha*beta)
+
+		#Compute terms of derivative
+		tOne = lC*np.power(rC,alpha-1) - lC*np.power(rC,alpha)
+		tTwo = cZero*np.exp((tZero-t)/tau)/tau
+
+		#Get sum
+		golishDeriv = tOne + tTwo
+
+		#Zero out anything before tZero
+		golishDeriv[t<tZero] = 0
+
+		#Perform convolution if necessary
+		if kernel is None:
+			return golishDeriv
+		else:
+			return np.convolve(golishDeriv,kernel)[0:golishDeriv.shape[0]] * (t[1]-t[0])
+
+	return golishModelDeriv
 
 def fengFunc(tau,aOne,aTwo,aThree,eOne,eTwo,eThree):
 

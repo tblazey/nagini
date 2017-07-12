@@ -32,6 +32,7 @@ argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('-decay',help='Perform decay correction before modeling. By default it occurs within  model',action='store_const',const=1)
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 argParse.add_argument('-dcv',action='store_const',const=1,help='AIF is from a DCV file, not a CRV file. Using -noDisp or -noDelay is recommended.')
+argParse.add_argument('-kernel',nargs=1,help='Deconvolution kernel for aif. Using along with -noDisp is strongly recommended.')
 argParse.add_argument('-noDisp',action='store_const',const=1,help='Do not include AIF dispersion term in model.')
 argParse.add_argument('-noDelay',action='store_const',const=1,help='Do not include AIF delay term in model. Implies -noDisp.')
 argParse.add_argument('-fModel',action='store_const',const=1,help='Does delay and/or dispersion estimate at each voxel.')
@@ -99,6 +100,15 @@ else:
 	#Make a fake mask
 	brainData = np.ones(pet.shape[0:3])
 
+#Load in the kernel if necessary
+if args.kernel is not None:
+	try:
+		kernel = np.loadtxt(args.kernel[0])
+	except(IOERROR):
+		print 'ERORR: Cannot load kernel at %s'%(args.kernel[0])
+else:
+	kernel = None
+
 #Get the image data
 petData = pet.get_data()
 
@@ -149,15 +159,18 @@ boundsAif = [lBoundAif,hBoundAif]
 aifScale = np.sum(aifC)
 aifNorm = aifC / aifScale
 
+#Get function for fitting aif
+golishFitFunc = nagini.golishFunc(kernel)
+
 #Run fit
-aifFit,aifCov = opt.curve_fit(nagini.golishModel,aifTime,aifNorm,initAif,bounds=boundsAif)
+aifFit,aifCov = opt.curve_fit(golishFitFunc,aifTime,aifNorm,initAif,bounds=boundsAif)
 
 #Make sure we have uniform AIF sampling
 sampTime = np.min(np.diff(aifTime))
 
-#Allow 50 seconds worth of extrapolation
+#Allow 60 seconds worth of extrapolation
 if args.extrap == 1:
-	interpTime = np.arange(np.floor(startTime[0]-50),np.ceil(endTime[-1]+sampTime+50),sampTime)
+	interpTime = np.arange(np.max((np.floor(startTime[0]),np.floor(aifTime[0]-60))),np.min((np.ceil(aifTime[-1]+sampTime+60),np.ceil(endTime)[-1])),sampTime)
 else:
 	interpTime = np.arange(np.floor(aifTime[0]),np.ceil(aifTime[-1]+sampTime),sampTime)
 
@@ -183,7 +196,7 @@ wbInit = [1,1]; wbBounds = np.array([[0.2,5.0],[0.2,5.0]]); wbScales = np.array(
 if args.noDelay == 1:
 
 	#Interpolate AIF with Golish model fit
-	interpAif = nagini.golishModel(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*aifScale
+	interpAif = nagini.golishFunc()(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*aifScale
 
 	#Get mask for useable PET data
 	wbPetMask = np.logical_and(midTime>=interpTime[0],midTime<=interpTime[-1])
@@ -197,14 +210,22 @@ elif args.noDisp == 1:
 	wbFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC,wbTac,midTime)
 
 	#Add in starting point, bounds, and scale
-	wbInit.append(1); wbBounds = np.vstack((wbBounds,[-4,4])); wbScales = np.hstack((wbScales,[10]))
+	if args.kernel is None:
+		wbInit.append(1); wbBounds = np.vstack((wbBounds,[-4,4]));
+	else:
+		wbInit.append(0); wbBounds = np.vstack((wbBounds,[-2,2]));
+	wbScales = np.hstack((wbScales,[10]))
 else:
 
 	#Model with delay and dispersion:
 	wbFunc = nagini.flowFour(aifFit,aifScale,interpTime,decayC,wbTac,midTime)
 
 	#Add in starting points, bounds, and scales
-	wbInit.extend([1,1]); wbBounds = np.vstack((wbBounds,[-4,4],[0,5])); wbScales = np.hstack((wbScales,[10,5]))
+	if args.kernel is None:
+		wbInit.extend([1,1]); wbBounds = np.vstack((wbBounds,[-4,4],[-5,5]));
+	else:
+		wbInit.extend([0,0]); wbBounds = np.vstack((wbBounds,[-2,2],[-2,2]));
+	wbScales = np.hstack((wbScales,[10,5]))
 
 #Setup number of iterations for whole brain fitting
 if args.weighted is None:
@@ -222,7 +243,10 @@ if wbOpt.success is False:
 	sys.exit()
 
 #Get whole-brian fitted values
-wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,weights,pred=True)
+if args.noDelay == 1:
+	wbFitted = wbFunc(wbOpt.x,weights,pred=True)
+else:
+	wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,weights,pred=True)
 
 #Remove optmization scales
 wbFit = wbOpt.x * wbScales
@@ -264,28 +288,42 @@ try:
 	axOne.legend(loc='upper left')
 
 	#Get plain old input function fitted values
-	aifFitted = nagini.golishModel(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5]) * aifScale
+	aifFitted = golishFitFunc(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5]) * aifScale
 
 	#Make input function plot
 	axTwo = plt.subplot(gs[0,1])
 	axTwo.scatter(aifTime,aifC,s=40,c="black")
-	axTwo.plot(interpTime,aifFitted,linewidth=5,label='Spline Fit')
+	axTwo.plot(interpTime,aifFitted,linewidth=5,label='Model Fit')
 	axTwo.set_xlabel('Time (seconds)')
 	axTwo.set_ylabel('Counts')
 	axTwo.set_title('Arterial Sampled Input function')
 
-	#Show corrected input funciton as well
-	if args.noDelay != 1:
+	#Logic for AIF correction
+	if args.noDelay != 1 or args.kernel is not None:
 
-		#Interpolate input function and correct for delay
-		cAif = nagini.golishModel(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])
+		#Get input function correcte for delay and possibly dispersion. Recognizes kernel if necessary
+		if  args.noDelay != 1:
 
-		#Correct for dispersion if necessary
-		if args.noDisp != 1:
-			cAif += nagini.golishModelDeriv(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
-			lLabel = 'Delay+Disp Corrected'
-		else:
-			lLabel = 'Delay Corrected'
+			#Interpolate input function and correct for delay
+			cAif = nagini.golishFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])
+
+			#Correct for dispersion if necessary
+			if args.noDisp != 1:
+				cAif += nagini.golishDerivFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
+				lLabel = 'Delay+Disp Corrected'
+			else:
+				lLabel = 'Delay Corrected'
+
+			#If we used kernel, make sure we say so
+			if args.kernel is not None:
+				lLabel += ' + Kernel'
+
+		#Only kernel
+		if args.noDelay == 1 and args.kernel is not None:
+
+			#Get AIF corrected with kernel
+			cAif = nagini.golishFunc(None)(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])	
+			lLabel = "Kernel Corrected"
 
 		#Apply scale
 		cAif *= aifScale
@@ -294,7 +332,7 @@ try:
 		axTwo.plot(interpTime[wbAifMask],cAif[wbAifMask],linewidth=5,c='green',label=lLabel)
 
 	#Make sure we have legend for input function plot
-	axTwo.legend(loc='upper right')
+	axTwo.legend(loc='lower right',fontsize=10)
 
 	#Add plots to figure
 	fig.add_subplot(axOne); fig.add_subplot(axTwo)
@@ -356,11 +394,11 @@ fitParams = np.zeros((nVox,nParam+1))
 if args.fModel != 1 and args.noDelay !=1:
 
 	#Get shifted aif
-	voxAif = nagini.golishModel(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])
+	voxAif = nagini.golishFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])
 
 	#Correct for dispersion if necessary
 	if args.noDisp != 1:
-		voxAif += nagini.golishModelDeriv(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
+		voxAif += nagini.golishMDerivFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
 
 	#Apply scale to AIF
 	voxAif *= aifScale

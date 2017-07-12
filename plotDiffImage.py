@@ -22,6 +22,7 @@ argParse.add_argument('-f',help='Frame to plot. Starts at 0. Default is 0',type=
 argParse.add_argument('-struct',help='Structural image for underlay',nargs=1,type=str)
 argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1,type=float,default=[1.0])
 argParse.add_argument('-scale',help='Scale difference image by specified amount',nargs=1,type=float)
+argParse.add_argument('-cSize',help='Font size for colorbar title. Default is 9.0',default=[9.0],nargs=1,type=float)
 argParse.set_defaults(showMin=False,showMax=True)
 args = argParse.parse_args()
 
@@ -191,11 +192,12 @@ axThree.set_position((0.56,0.09,axThreeP.width,axThreeP.height))
 #Add in positive colorbar
 padLength = np.max([len(str(args.thr[0])),len(str(args.thr[1]))])*3.0
 axFour = plt.subplot(gs[3])
-pBar = mpl.colorbar.ColorbarBase(axFour,cmap=pMap,ticks=[0,1])
+pBar = mpl.colorbar.ColorbarBase(axFour,cmap=pMap,ticks=[0,0.5,1])
 if args.pTitle is not None:
-	pBar.set_label(args.pTitle[0],color='white',rotation=360,size=9,weight="bold",labelpad=-padLength)
+	pBar.set_label(args.pTitle[0],color='white',rotation=360,size=args.cSize[0],weight="bold",labelpad=-padLength)
 pBar.ax.set_position((0.775, 0.475, 0.0225, 0.2))
-pBar.set_ticklabels([args.thr[0],args.thr[1]])
+midTick = (args.thr[1] - args.thr[0]) / 2.0 + args.thr[0]
+pBar.set_ticklabels([args.thr[0],midTick,args.thr[1]])
 for tick in pBar.ax.yaxis.get_major_ticks():
     tick.label2.set_color('white')
     tick.label2.set_weight('bold')
@@ -203,11 +205,11 @@ for tick in pBar.ax.yaxis.get_major_ticks():
 
 #Add in negative colorbar
 axFive = plt.subplot(gs[4])
-nBar = mpl.colorbar.ColorbarBase(axFive,cmap=nDisplay,ticks=[0,1])
+nBar = mpl.colorbar.ColorbarBase(axFive,cmap=nDisplay,ticks=[0,0.5,1])
 if args.nTitle is not None:
-	nBar.set_label(args.nTitle[0],color='white',rotation=360,size=9,weight="bold",labelpad=-padLength)
+	nBar.set_label(args.nTitle[0],color='white',rotation=360,size=args.cSize[0],weight="bold",labelpad=-padLength)
 nBar.ax.set_position((0.775, 0.2, 0.0225, 0.2))
-nBar.set_ticklabels([-args.thr[1],-args.thr[0]])
+nBar.set_ticklabels([-args.thr[1],-midTick,-args.thr[0]])
 for tick in nBar.ax.yaxis.get_major_ticks():
     tick.label2.set_color('white')
     tick.label2.set_weight('bold')
