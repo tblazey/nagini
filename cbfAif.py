@@ -416,9 +416,9 @@ for voxIdx in tqdm(range(nVox)):
 	if args.fModel == 1 and args.noDelay !=1:
 
 		if args.noDisp == 1:
-			optFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC)
+			optFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC,voxTac,midTime)
 		else:
-			optFunc = nagini.flowFour(aifCoefs,aifKnots,interpTime,decayC,voxCbv)
+			optFunc = nagini.flowFour(aifFit,aifScale,interpTime,decayC,voxTac,midTime)
 	else:
 		optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],decayC,voxTac,midTime,wbPetMask)
 
@@ -440,7 +440,7 @@ for voxIdx in tqdm(range(nVox)):
 		if args.fModel == 1 and args.noDelay !=1:
 
 			#Save additional parameter estimates
-			fitParams[voxIdx,2:nParam] = voxOpt[2:nParam]*wbScales[2:nParam]
+			fitParams[voxIdx,2:nParam] = voxOpt.x[2:nParam]*wbScales[2:nParam]
 
 			#Get fitted values
 			voxPred,voxMask,_ = optFunc(voxOpt.x,weights,pred=True)
@@ -459,7 +459,7 @@ for voxIdx in tqdm(range(nVox)):
 			voxMean = np.mean(voxTac[wbPetMask])
 
 		#Calculate normalized root mean square deviation
-		fitParams[voxIdx,2] = np.sqrt(np.sum(np.power(voxResid,2))/voxResid.shape[0]) / voxMean
+		fitParams[voxIdx,-1] = np.sqrt(np.sum(np.power(voxResid,2))/voxResid.shape[0]) / voxMean
 
 	except(RuntimeError):
 		noC += 1
