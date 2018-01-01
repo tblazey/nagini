@@ -195,7 +195,7 @@ generated quantities {
 	kOne = flow/6000*dens/cbv;
 		
 	//Get interpolated aif. Correct for delay
-	aifC = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs)*exp(log(2)/122.24*delay);
+	aifC = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs);
 
 	//Get model predictions
 	mu = convolve((flow/6000.0*dens)*aifC,eVec(-((flow/lambda/6000)+decay)*aifTime,nAif),nAif,aifStep) + cbv*aifC;

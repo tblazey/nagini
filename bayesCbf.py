@@ -8,26 +8,6 @@
 
 bayesCbf.py: Calculates CBF using a 015 water scan and an arterial sampled input function
 
-Uses model described by Mintun et al, Journal of Nuclear 1983
-
-Produces the following outputs:
-	wb -> Text file with estimates to whole-brian curve
-	wbPlot -> Plot of whole-brain curve, fit, and input function
-	cbf -> Voxelwise map of cerebral blood volume in mL/100g*min
-	cbfVar -> Voxelwise map of the variance of the cbf estimate.
-	lambda -> Voxelwise map of the blood brain parition coefficient. In ml/g
-	lambdaVar -> Voxelwise map of the variance fo the lambda estimate.
-	nRmsd -> Normalized (to-mean) root-mean-square deviation of fit
-
-If -fModel is set and -noDelay is not it will produce:
-	delay -> Voxelwise map of the shift of the input function (in seconds)
-   	delayVar -> Voxelwise map of shift variance
-If -fModel is set and -noDisp is not, you also get:
-   	disp -> Voxelwise map of dispersion
-   	dispVar -> Voxelwise map of dispersion variance
-
-Requires the following modules:
-	argparse, numpy, nibabel, nagini, tqdm, scikit-learn, pystan, os
 
 Tyler Blazey, Winter 2017
 blazey@wustl.edu
@@ -118,7 +98,7 @@ if args.cbv is not None:
 else:
 	#Just use zeros if we don't add a cbv image
 	wbCbv = 0
-	cbvRoi = np.zeros(petRoi.shape[0])
+	cbvRoi = np.zeros(petRoi.shape)
 
 #Get pet start and end times. Assume start of first recorded frame is injection (has an offset which is subtracted out)
 startTime = info[:,0] - info[0,0]
@@ -140,7 +120,7 @@ if args.dcv != 1:
 	#Reset first two points in AIF which are not traditionally used
 	aifC[0:2] = aifC[2]
 
-	#Add well counter and decay correction from start of sampling
+	#Add well counter correction
 	aifC = aifC * args.well[0]
 
 	#Decay correct each CRV point to start time reported in first saved PET frame
@@ -208,7 +188,7 @@ wbData = {
 }
 
 #Define  whole-brain parameters and initilizations
-wbPars = ['flow','lambda','delay','nu','sigma']
+wbPars = ['flow','lambda','delay','nu','sigma','petMu','petPost','aifC','rmsd']
 if args.dcv is None:
 	wbPars.append('disp')
 if args.cbv is not None:
@@ -305,9 +285,6 @@ aifFit = np.dot(cBasis,aifCoefs)
 #Correct for dispersion if necessary
 if args.dcv is None:
 	aifFit += np.dot(cBasisD,aifCoefs)*np.mean(wbEst[3,:])
-
-#Correct for decay during shift
-aifFit *= np.exp(np.log(2)/122.24*np.mean(wbEst[2,:]))
 
 #Make data structure for region fit
 regData = {

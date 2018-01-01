@@ -197,7 +197,7 @@ model {
 
 	//Get interpolated aif. Correct for delay and dispersion
 	aifInterp = splineInterp(aifTime+delay, nAif, aifKnots, nKnot, aifCoefs);
-	aifC = (aifInterp[,1] + aifInterp[,2]*disp)*exp(log(2)/122.24*delay);
+	aifC = (aifInterp[,1] + aifInterp[,2]*disp);
 
 	//Get model predictions
 	mu = convolve((flow/6000.0*dens)*aifC,eVec(-((flow/lambda/6000.0)+decay)*aifTime,nAif),nAif,aifStep) + cbv*aifC;
