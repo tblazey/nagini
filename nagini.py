@@ -56,7 +56,7 @@ fdgAifLstPen: Version of fdgAifLst with penalty
 #What libraries do we need
 import numpy as np, nibabel as nib, sys, scipy.ndimage as img
 import scipy.interpolate as interp, subprocess as sub, scipy.special as spec
-import scipy.integrate as integ
+import scipy.integrate as integ, scipy.optimize as opt
 
 #Only import pystan if we can
 try:
@@ -199,8 +199,10 @@ def reshape4d(array):
 	   2-D numpy array with dimensions (a*b*c,d)
 
 	"""
-
-	return array.reshape((array.shape[0]*array.shape[1]*array.shape[2],array.shape[3]))
+	if len(array.shape)==4:
+		return array.reshape((array.shape[0]*array.shape[1]*array.shape[2],array.shape[3]))
+	else:
+		return array.reshape((array.shape[0]*array.shape[1]*array.shape[2],1))
 
 def loadInfo(iPath):
 	"""
@@ -224,7 +226,12 @@ def loadInfo(iPath):
 	except (IOError):
 		print 'ERROR: Cannot load info file at %s'%(iPath)
 		sys.exit()
-	return info
+
+	#Reshape if necessary
+	if len(info.shape) == 1:
+		return info[np.newaxis,:]
+	else:
+		return info
 
 def writeText(out,X):
 	"""
@@ -271,7 +278,7 @@ def flowTwoIdaif(X,flow,lmbda=1):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-flow/lmbda*X[0,:]))*(X[0,1]-X[0,0])
 	return flowConv[0:X.shape[1]]
 
-def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
+def flowTwo(aifTime,cAif,petTac,petTime,petMask):
 
 	#Mask pet data now
 	petTacM = petTac[petMask]
@@ -286,8 +293,6 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 	   A n length array of AIF sample times
 	cAif: array
 	   A n length array of AIF values at aifTime
-	decayC: float
-	   Decay constant for model. Set to 0 for no decay correction.
 	petTac: array
 		An m length array containing PET time activity Curve
 	petTime: array
@@ -339,7 +344,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 		lmbda = param[1] * 0.52
 
 		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAif,np.exp(-((flow/lmbda)+decayC)*aifTime))[0:aifTime.shape[0]]
+		flowConv = np.convolve(flow*cAif,np.exp(-(flow/lmbda)*aifTime))[0:aifTime.shape[0]]
 		flowConv *= (aifTime[1]-aifTime[0])
 
 		#Get interpolation function for model predictions
@@ -354,7 +359,7 @@ def flowTwo(aifTime,cAif,decayC,petTac,petTime,petMask):
 	#Return function
 	return flowPred
 
-def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime,kernel=None):
+def flowThreeDelay(aifCoef,aifScale,aifTime,petTac,petTime,kernel=None):
 
 	"""
 
@@ -367,8 +372,6 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime,kernel=None):
 	   A scale factor for AIF
 	aifTime: array
 	   A n length array of times to samples AIF at
-	decayC: float
-	   Decay constant for model. Set to 0 for no decay correction.
 	petTac: array
 		An m length array containing PET data
 	petTime: array
@@ -434,7 +437,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime,kernel=None):
 		cAifM = cAif[aifMask]
 
 		#Calculate model prediction
-		flowConv = np.convolve(flow*cAifM,np.exp(-((flow/lmbda)+decayC)*aifTimeM))[0:aifTimeM.shape[0]]
+		flowConv = np.convolve(flow*cAifM,np.exp(-(flow/lmbda)*aifTimeM))[0:aifTimeM.shape[0]]
 		flowConv *= (aifTimeM[1]-aifTimeM[0])
 
 		#Get interpolation function for model predictions
@@ -457,7 +460,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,decayC,petTac,petTime,kernel=None):
 	#Return function
 	return flowPred
 
-def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
+def flowFour(aifCoef,aifScale,aifTime,petTac,petTime):
 
 	"""
 
@@ -470,8 +473,6 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 	   A scale factor for AIF
 	aifTime: array
 	   A n length array of times to samples AIF at
-	decayC: float
-	   Decay constant for model. Set to 0 for no decay correction.
 	petTac: array
 		A m length array containing PET data
 	petTime: array
@@ -540,7 +541,7 @@ def flowFour(aifCoef,aifScale,aifTime,decayC,petTac,petTime):
 		cAifM = cAif[aifMask]
 
 		#Calculate model prediciton
-		flowConv = np.convolve(flow*cAifM,np.exp(-((flow/lmbda)+decayC)*aifTimeM))[0:aifTimeM.shape[0]]
+		flowConv = np.convolve(flow*cAifM,np.exp(-(flow/lmbda)*aifTimeM))[0:aifTimeM.shape[0]]
 		flowConv *= (aifTimeM[1]-aifTimeM[0])
 
 		#Get PET points where we have AIF data
@@ -1677,7 +1678,7 @@ def gluAifLst(aifTime,pAif,pet,cOne,flow):
 	#Return function
 	return gluPred
 
-def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,coefs=False):
+def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,coefs=False,metC=True):
 
 	"""
 
@@ -1704,10 +1705,12 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
  	   The penalty for least squares optimization
 	penC: float
 	   Value at which penalty = 0
+	weights: array
+	   A m length array of weights for pet data	
 	coefs: logical
 	   If true, returns predictions and coefficients
-	weights: array
-	   A m length array of weights for pet data
+	metC: logical
+	   If true, use an estimated plasma, metabolite corrected input function
 
 
 	Returns
@@ -1737,11 +1740,12 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 	#Interpolate compartment one
 	cOnePet = interp.interp1d(aifTime,cOne,kind='linear')(petTime)
 
-	#Convert AIF to plasma
-	pAif = wbAif*(1.19 + -0.002*aifTime/60.0)
-
-	#Remove metabolites from plasma input function\
-	pAif *=  (1 - (4.983e-05*aifTime))
+	#If necessary, convert AIF to plasma and correct for metabolites.
+	if metC is True:
+		pAif = wbAif*(1.19 + -0.002*aifTime/60.0)
+		pAif *=  (1 - (4.983e-05*aifTime))
+	else:
+		pAif = wbAif	
 
 	#Compute first basis function
 	bfOne = np.convolve(pAif,np.exp(-b1*aifTime))[0:aifTime.shape[0]]
@@ -1763,7 +1767,7 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 
 	#Compute the alphas using linear least squares. Use ridge regression if necessary.
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
-	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(pet-cOnePet))
+	alpha,_,= opt.nnls(W.dot(petX),W.dot(pet-cOnePet))
 
 	#Calculate model prediction and residual
 	petPred = cOnePet + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
@@ -1774,6 +1778,8 @@ def gluDelayLstPen(params,aifFunc,aifTime,pet,petTime,flow,vb,pen,penC,weights,c
 		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*np.power(np.log(penC/params[0]),2)
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1,b2])
+
+
 
 def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coefs=False):
 
@@ -1803,7 +1809,7 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coef
 	weights: array
 	   A m length array of weights for pet data
 	coefs: logical
-		If true, returns predictions and coefficients
+	   If true, returns predictions and coefficients
 
 	Returns
 	-------
@@ -1845,7 +1851,7 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coef
 
 	#Compute the alphas using linear least squares
 	petX = np.stack((bfOnePet,bfTwoPet),axis=1)
-	alpha,_,_,_ = np.linalg.lstsq(W.dot(petX),W.dot(petC))
+	alpha,_,= opt.nnls(W.dot(petX),W.dot(petC))
 
 	#Calculate model prediction and residual
 	petPred = cOne + alpha[0]*bfOnePet + alpha[1]*bfTwoPet
@@ -1856,6 +1862,216 @@ def gluAifLstPen(params,aifTime,pAif,pet,petTime,cOne,flow,pen,penC,weights,coef
 		return np.sum(weights*np.power(petResid,2)) + pen*np.sum(pet*weights)*np.power(np.log(penC/params[0]),2)
 	else:
 		return petPred,np.array([alpha[0],alpha[1],b1,b2])
+
+def cvOpt(pen,aifFunc,aifTime,tac,tacTime,flow,vb,weights,init,bounds,metC):
+
+	"""
+
+	Parameters
+	----------
+
+	pen: float
+	   Regression penalty.
+	aifFunc: function
+	   Function for interoplating AIF
+	aifTime: array
+	   A n length array of times to samples AIF at
+	tac: array
+	   A m length array of pet data
+	tacTime: array
+	   A m x 1 array of PET sample times
+	flow: float
+	   Flow in units 1/seconds.
+	vb: float
+	   CBV in units mlB/mlT
+	weights: array
+	   A m length array of weights for pet data
+	init: array
+	   A 3x1 array of initial values for fit
+        bounds: array
+	   A 3x2 array of fit bounds	
+	metC: logical
+	   If true, use an estimated plasma, metabolite corrected input function
+
+
+	Returns
+	-------
+	cv: float
+	   Cross-validation error
+
+	"""
+
+	#Loop through data points
+	mse = 0
+	for dIdx in range(tac.shape[0]):
+		
+		#Remove data points
+		lTac = np.delete(tac,dIdx)
+		lTime = np.delete(tacTime,dIdx)
+		lWeights = np.delete(weights,dIdx)
+
+		#Arguments for fit
+		lArgs = (aifFunc,aifTime,lTac,lTime,flow,vb,pen,1,lWeights,False,metC)
+
+		#Attempt to fit model to whole-brain curve
+		fit = opt.minimize(gluDelayLstPen,init,args=lArgs,method='L-BFGS-B',bounds=bounds,options={'maxls':100})
+
+		#Get coefficen
+		fitted,coef = gluDelayLstPen(fit.x,aifFunc,aifTime,lTac,lTime,flow,vb,pen,1,lWeights,True,metC)
+
+		#Get parameters
+		params = gluCalc(coef,flow,vb,1,1.05)
+
+		#Interplolate AIF
+		aifInterp = aifFunc(aifTime+fit.x[2])
+
+		#Compute test fit
+		testFit = tacGen(aifTime,aifInterp,tacTime[dIdx],[params[1]/60,params[2]/60,params[3]/60,params[4]/60,flow,vb],metC)		
+		
+		#Compute square error
+		mse += np.power(testFit-tac[dIdx],2)
+
+	#Return mean square error
+	return mse / tac.shape[0]
+
+def cvOptRoi(pen,aifTime,wbAif,pAif,tac,tacTime,cOnePet,flow,vb,penC,weights,init,bounds,metBool):
+
+	"""
+
+	Parameters
+	----------
+
+	pen: float
+	   Regression penalty.
+	aifTime: array
+	   A n length array of times to samples AIF at. Assumed to be evently spaced
+	wbAif: array
+	   A n length array of whole-blood AIF. 
+	pAif: array
+	   A n length array of plasma AIF
+	tac: array
+	   A m length array of pet data
+	tacTime: array
+	   A m x 1 array of PET sample times
+        cOnePet: array
+	   A m length array of predictions for comparment one
+	flow: float
+	   Flow in units 1/seconds.
+	vb: float
+	   CBV in units mlB/mlT
+ 	penC: float
+	   Prior for penalty term
+	weights: array
+	   A m length array of weights for pet data
+	init: array
+	   A [2x1] array of initial values for optimization	
+	metC: logical
+	   If true, use an estimated plasma, metabolite corrected input function
+
+
+	Returns
+	-------
+	cv: float
+	   Cross valiation error
+
+	"""
+
+	#Loop through data points
+	mse = 0
+	for dIdx in range(tac.shape[0]):
+		
+		#Remove data points
+		lTac = np.delete(tac,dIdx)
+		lTime = np.delete(tacTime,dIdx)
+		lWeights = np.delete(weights,dIdx)
+		lcOne = np.delete(cOnePet,dIdx)
+
+		#Arguments for fit
+		lArgs = (aifTime,pAif,lTac,lTime,lcOne,flow,pen,penC,lWeights,False)
+
+		#Attempt to fit model to whole-brain curve
+		fit = opt.minimize(gluAifLstPen,init,args=lArgs,method='L-BFGS-B',bounds=bounds,options={'maxls':100})
+
+		#Get coefficents
+		fitted,coef = gluAifLstPen(fit.x,aifTime,pAif,lTac,lTime,lcOne,flow,pen,penC,lWeights,True)
+
+		#Get parameters
+		params = gluCalc(coef,flow,vb,1,1.05)
+		
+		#Compute test fit
+		testFit = tacGen(aifTime,wbAif,tacTime[dIdx],[params[1]/60,params[2]/60,params[3]/60,params[4]/60,flow,vb],metBool)		
+		
+		#Compute square error
+		mse += np.power(testFit-tac[dIdx],2)
+
+	#Return cross validation error
+	return mse / tac.shape[0]
+
+def tacGen(aifTime,wbAif,petTime,params,metC=True):
+
+	"""
+
+	Parameters
+	----------
+
+	aifTime: array
+	  A n length of array of AIF sample times. Assumed to be evenly spaced
+	wbAif: array
+	   A n length array of AIF data
+	petTime: array
+	   A m x 1 array of PET sample times
+	params: array
+	   Array of parameters (K1[mLB/mlT/sec],k2[1/sec],k3[1/sec],k4[1/sec],k5[1/sec],vB[mlB/mlT])
+	metC: bool
+	   If true, performs metabolite correction on input function
+
+	Returns
+	-------
+	mse: float
+	   Mean squared error from leave one out cross-valation
+
+	"""
+
+	#Seperate out rate constants
+	K1 = params[0]
+	k2 = params[1]
+	k3 = params[2]
+	k4 = params[3]
+	k5 = params[4]
+	vB = params[5]
+	
+	#Get AIF sampling time
+	aifSamp = aifTime[1] - aifTime[0]
+
+	#If necessary, convert AIF to plasma and correct for metabolites.
+	if metC is True:
+		pAif = wbAif*(1.19 + -0.002*aifTime/60.0)
+		pAif *=  (1 - (4.983e-05*aifTime))
+	else:
+		pAif = wbAif
+
+	#Define compartment one
+	lOne = K1 * np.exp(-(k2+k3)*aifTime)
+	cOne = np.convolve(lOne,pAif) * aifSamp
+
+	#And comparment two
+	lTwo = ((K1*k3)/(k2+k3-k4)) * (np.exp(-k4*aifTime)-np.exp(-(k2+k3)*aifTime))
+	cTwo = np.convolve(lTwo,pAif) * aifSamp
+	
+	#And don't forget compartment three
+	lThree = K1 * k3 * k4 * ( (np.exp(-(k2+k3)*aifTime)/((k5-k2-k3)*(k4-k2-k3))) +
+	                          (np.exp(-k4*aifTime)/((k2+k3-k4)*(k5-k4))) +
+	                          (np.exp(-k5*aifTime)/((k2+k3-k5)*(k4-k5))) )
+	cThree = np.convolve(lThree,pAif) * aifSamp
+	                    
+	#Get compartmental sum with blood volume
+	cT = cOne[0:aifTime.shape[0]] + cTwo[0:aifTime.shape[0]] + cThree[0:aifTime.shape[0]] + wbAif*vB
+	
+	#Interpolate model at pet sample times
+	pet = interp.interp1d(aifTime,cT,kind='linear')(petTime)
+	
+	#Return model 
+	return pet
 
 def golishFunc(kernel=None):
 

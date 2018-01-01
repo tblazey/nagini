@@ -29,14 +29,12 @@ blazey@wustl.edu
 
 import argparse, sys
 argParse = argparse.ArgumentParser(description='Estimates cerebral blood flow using:')
-argParse.add_argument('pet',help='Nifti oc image',nargs=1,type=str)
+argParse.add_argument('pet',help='Nifti image with decay corrected well counts',nargs=1,type=str)
 argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('aif',help='Arterial-sampled input function',nargs=1,type=str)
 argParse.add_argument('well',help='Well-counter calibration factor',nargs=1,type=float)
-argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
 argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
-argParse.add_argument('-decay',help='Perform decay correction before CBV calcuation. By default it occurs within  calculation',action='store_const',const=1)
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-r',help='Mean ratio of small-vessel to large-vessel hematocrit. Default is 0.85',default=0.85,metavar='ratio',type=float)
 argParse.add_argument('-nKnots',nargs=1,type=int,help='Number of knots for AIF spline. Default is number of time points.',metavar='n')
@@ -92,13 +90,13 @@ else:
 petMasked = petData.flatten()[brainData.flatten()>0]
 
 #Get cbv ranges, using start of scan as zero point
-cbvTime = np.array([0.0,info[2]])
+cbvTime = np.array([0.0,info[0,2]])
 
 #Get aif time variable
 aifTime = aif[:,0]
 
-#Apply pie factor and 4dfp offset factor
-aifC = aif[:,1] / args.pie[0] / 0.06
+#Get AIF data
+aifC = aif[:,1]
 
 #Logic for preparing blood sucker curves
 if args.dcv != 1:
@@ -106,21 +104,16 @@ if args.dcv != 1:
 	#Reset first two points in AIF which are not traditionally used
 	aifC[0:2] = aifC[2]
 
-	#Add well counter and decay correction from start of sampling
+	#Add well counter factor
 	aifC = aifC * args.well[0]
 
 	#Decay correct each CRV point to start time reported in first saved PET frame
-	if args.decay == 1:
-		aifC *= np.exp(np.log(2)/122.24*info[0]) * np.exp(np.log(2)/122.24*aifTime)
-	else:
-		petMasked /= info[3]
+	aifC *= np.exp(np.log(2)/122.24*info[0,0]) * np.exp(np.log(2)/122.24*aifTime)
+
 
 else:
-	if args.decay == 1:
-		aifC *= np.exp(np.log(2)/122.24*info[0])
-	else:
-		aifC /= np.exp(np.log(2)/122.24*aifTime)
-		petMasked /= info[3]
+	#Decay correct to PET start
+	aifC *= np.exp(np.log(2)/122.24*info[0,0])
 
 #Set number of knots
 if args.nKnots is None:

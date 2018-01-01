@@ -22,14 +22,12 @@ blazey@wustl.edu
 
 import argparse, sys
 argParse = argparse.ArgumentParser(description='Estimates blood flow using:')
-argParse.add_argument('pet',help='Nifti water image',nargs=1,type=str)
+argParse.add_argument('pet',help='Nifti image with decay corrected well counts',nargs=1,type=str)
 argParse.add_argument('info',help='Yi Su style info file',nargs=1,type=str)
 argParse.add_argument('aif',help='Arterial-sampled input function',nargs=1,type=str)
 argParse.add_argument('well',help='Well-counter calibration factor',nargs=1,type=float)
-argParse.add_argument('pie',help='Pie calibration factor',nargs=1,type=float)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
 argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
-argParse.add_argument('-decay',help='Perform decay correction before modeling. By default it occurs within  model',action='store_const',const=1)
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 argParse.add_argument('-dcv',action='store_const',const=1,help='AIF is from a DCV file, not a CRV file. Using -noDisp or -noDelay is recommended.')
 argParse.add_argument('-kernel',nargs=1,help='Deconvolution kernel for aif. Using along with -noDisp is strongly recommended.')
@@ -123,8 +121,8 @@ endTime = info[:,2] + startTime
 #Get aif time variable. Assume clock starts at injection.
 aifTime = aif[:,0]
 
-#Apply pie factor and 4dfp offset factor
-aifC = aif[:,1] / args.pie[0] / 0.06
+#Extract AIF counts
+aifC = aif[:,1] 
 
 #Logic for preparing blood sucker curves
 if args.dcv != 1:
@@ -132,22 +130,19 @@ if args.dcv != 1:
 	#Reset first two points in AIF which are not traditionally used
 	aifC[0:2] = aifC[2]
 
-	#Add well counter and decay correction from start of sampling
+	#Convert to well counter units
 	aifC = aifC * args.well[0]
 
-	#Decay correct each CRV point to start time reported in first saved PET frame
-	if args.decay == 1:
-		aifC *= np.exp(np.log(2)/122.24*info[0,0]) * np.exp(np.log(2)/122.24*aifTime)
-
+	#Decay correct to PET start
+	aifC *= np.exp(np.log(2)/122.24*info[0,0]) * np.exp(np.log(2)/122.24*aifTime)
+		
 else:
 
 	#Reset last point which appears to be consistently bad
 	aifC[-1] = aifC[aifC.shape[0]-2]
 
-	if args.decay == 1:
-		aifC *= np.exp(np.log(2)/122.24*info[0,0])
-	else:
-		aifC /= np.exp(np.log(2)/122.24*aifTime)
+	#Add in decay correction to PET start
+	aifC *= np.exp(np.log(2)/122.24*info[0,0])
 
 #Create inits and bounds for AIF fit
 initAif = [0.019059,0.0068475,2.937158,6.030855,35.5553015,11.652845]
@@ -179,15 +174,6 @@ else:
 ###################
 print ('Beginning fitting procedure...')
 
-#Setup proper decay constant based on whether or not input is decay corrected
-if args.decay == 1:
-	decayC = 0
-else:
-	decayC = np.log(2)/122.24
-
-	#Remove decay correction from images
-	petMasked /= info[:,3]
-
 #Get whole-brain tac
 wbTac = np.mean(petMasked,axis=0)
 
@@ -202,12 +188,12 @@ if args.noDelay == 1:
 	wbPetMask = np.logical_and(midTime>=interpTime[0],midTime<=interpTime[-1])
 
 	#Model with just flow and lambda
-	wbFunc = nagini.flowTwo(interpTime,interpAif,decayC,wbTac,midTime,wbPetMask)
+	wbFunc = nagini.flowTwo(interpTime,interpAif,wbTac,midTime,wbPetMask)
 
 elif args.noDisp == 1:
 
 	#Model with just delay
-	wbFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC,wbTac,midTime)
+	wbFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,wbTac,midTime)
 
 	#Add in starting point, bounds, and scale
 	if args.kernel is None:
@@ -218,7 +204,7 @@ elif args.noDisp == 1:
 else:
 
 	#Model with delay and dispersion:
-	wbFunc = nagini.flowFour(aifFit,aifScale,interpTime,decayC,wbTac,midTime)
+	wbFunc = nagini.flowFour(aifFit,aifScale,interpTime,wbTac,midTime)
 
 	#Add in starting points, bounds, and scales
 	if args.kernel is None:
@@ -289,7 +275,7 @@ try:
 
 	#Get plain old input function fitted values
 	aifFitted = golishFitFunc(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5]) * aifScale
-
+	
 	#Make input function plot
 	axTwo = plt.subplot(gs[0,1])
 	axTwo.scatter(aifTime,aifC,s=40,c="black")
@@ -398,7 +384,7 @@ if args.fModel != 1 and args.noDelay !=1:
 
 	#Correct for dispersion if necessary
 	if args.noDisp != 1:
-		voxAif += nagini.golishMDerivFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
+		voxAif += nagini.golishDerivFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
 
 	#Apply scale to AIF
 	voxAif *= aifScale
@@ -416,11 +402,11 @@ for voxIdx in tqdm(range(nVox)):
 	if args.fModel == 1 and args.noDelay !=1:
 
 		if args.noDisp == 1:
-			optFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,decayC,voxTac,midTime)
+			optFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,voxTac,midTime)
 		else:
-			optFunc = nagini.flowFour(aifFit,aifScale,interpTime,decayC,voxTac,midTime)
+			optFunc = nagini.flowFour(aifFit,aifScale,interpTime,voxTac,midTime)
 	else:
-		optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],decayC,voxTac,midTime,wbPetMask)
+		optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],voxTac,midTime,wbPetMask)
 
 
 	try:

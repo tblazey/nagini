@@ -31,16 +31,11 @@ argParse.add_argument('roi',help='ROIs for two stage procedure',nargs=1,type=str
 argParse.add_argument('cbf',help='CBF image. In mL/hg*min',nargs=1,type=str)
 argParse.add_argument('cbv',help='CBV image for blood volume correction in mL/hg',nargs=1,type=str)
 argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
-argParse.add_argument('-pen',help='Penalty term for whole-brain estimates. Default is no penalty (0)',nargs=1,type=float,default=[0.0])
-argParse.add_argument('-roiPen',help='Penalty term for ROI estimates. Default is 2.5',nargs=1,type=float,default=[2.5])
-argParse.add_argument('-voxPen',help='Penalty term for voxel estimates. Default is 15.0',nargs=1,type=float,default=[15.0])
 argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('-seg',help='Segmentation image used to create CBV averages.',nargs=1,type=str)
 argParse.add_argument('-fwhm',help='Apply smoothing kernel to CBF and CBV',nargs=1,type=float)
 argParse.add_argument('-fwhmSeg',help='Apply smoothing kerenl to CBV segmentation image',nargs=1,type=float)
 argParse.add_argument('-noRoi',action='store_const',const=1,help='Do not perform region estimation. Implies -noVox')
-argParse.add_argument('-noVox',action='store_const',const=1,help='Do not perform voxel estimation')
-argParse.add_argument('-noFill',action='store_const',const=1,help='Do not replace nans with 6-neighbor average')
 argParse.add_argument('-dT',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-dB',help='Density of blood in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
 argParse.add_argument('-oBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for beta one, where bounds are 0.005*[lower,upper]. Defalt is [0.2,5]')
@@ -268,7 +263,7 @@ wbTac = np.mean(petMasked,axis=0)
 ###################
 ###Model Fitting###
 ###################
-print ('Beginning fitting procedure...')
+print ('Fitting whole brain curve...')
 
 #Use either uniform or John Lee Jeffery style weights
 if args.weighted is None:
@@ -279,12 +274,15 @@ else:
 
 #Decide about metabolite correction
 if args.noMet is None:
-	metBool = False
-else:
 	metBool = True
+else:
+	metBool = False
+
+#Use cross-validation to get penalty for whole-brain curve
+wbCv = opt.minimize_scalar(nagini.cvOpt,bounds=([0,15]),args=(aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,weights,wbInit,np.array(wbBounds).T,metBool),options={'maxiter':50},method='Bounded',tol=0.1)
 
 #Arguments for whole-brain model fit
-wbArgs = (aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,args.pen[0],1,weights,False,metBool)
+wbArgs = (aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,wbCv.x,1,weights,False,metBool)
 
 #Attempt to fit model to whole-brain curve
 wbFit = opt.minimize(nagini.gluDelayLstPen,wbInit,args=wbArgs,method='L-BFGS-B',bounds=np.array(wbBounds).T,options={'maxls':100})
@@ -296,18 +294,18 @@ if wbFit.success is False:
 
 #Get estimated coefficients and fit
 wbOpt = wbFit.x
-wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,args.pen[0],1,weights,True,metBool)
+wbFitted,wbCoef = nagini.gluDelayLstPen(wbOpt,aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,wbCv.x,1,weights,True,metBool)
 
 #Use coefficents to calculate all my parameters
 wbParams = nagini.gluCalc(wbCoef,flowWb,vbWb,args.blood,args.dT)
 
 #Create string for whole-brain parameter estimates
 labels = ['gef','kOne','kTwo','kThree','kFour','cmrGlu',
-          'alphaOne','alphaTwo','betaOne','betaTwo','netEx','influx','DV','conc']
+          'alphaOne','alphaTwo','betaOne','betaTwo','netEx','influx','DV','conc','penalty']
 values = [wbParams[0],wbParams[1],wbParams[2],wbParams[3],wbParams[4],wbParams[5],
-          wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],wbParams[6],wbParams[7],wbParams[8],wbParams[9]]
+          wbCoef[0],wbCoef[1],wbCoef[2],wbCoef[3],wbParams[6],wbParams[7],wbParams[8],wbParams[9],wbCv.x]
 units = ['fraction','mLBlood/mLTissue/min','1/min','1/min','1/min','uMol/hg/min',
-         '1/sec','1/sec','1/sec','1/sec','fraction','uMol/g/min','mLBlood/mLTissue','uMol/g']
+         '1/sec','1/sec','1/sec','1/sec','fraction','uMol/g/min','mLBlood/mLTissue','uMol/g','']
 wbString = ''
 for pIdx in range(len(labels)):
 	wbString += '%s = %f (%s)\n'%(labels[pIdx],values[pIdx],units[pIdx])
@@ -367,12 +365,12 @@ try:
 except(RuntimeError,IOError):
 	print 'ERROR: Could not save figure. Moving on...'
 
-#Don't do region/voxel estimation if user says not to
+#Don't do region estimation if user says not to
 if args.noRoi == 1:
 	nagini.writeArgs(args,args.out[0])
 	sys.exit()
 
-#Get number of parameters for roi/voxel optimization
+#Get number of parameters for roi optimization
 nParam = wbOpt.shape[0]-1
 roiInit = np.copy(wbOpt[0:nParam])
 
@@ -393,9 +391,7 @@ roiBounds = np.array([lBounds,hBounds],dtype=np.float).T
 #Setup for roi optmization
 uRoi = np.unique(roiMasked)
 nRoi = uRoi.shape[0]
-roiParams = np.zeros((nRoi,nParam+13))
-if args.noVox != 1:
-	voxParams = np.zeros((roiMasked.shape[0],nParam+13)); voxParams[:] = np.nan
+roiParams = np.zeros((nRoi,nParam+14))
 
 #Interpolate input function using delay
 wbAif = aifFunc(interpTime+wbOpt[2])
@@ -411,7 +407,7 @@ else:
 	pAif = wbAif	
 
 #Loop through every region
-roiC = 0; voxC = 0
+roiC = 0
 for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 	#Get regional pet data
@@ -429,12 +425,17 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 	cOneRoi = roiVbMean*wbAifPet
 
 	try:
+
+		#Run cross-valation to determine penalty
+		roiCvArgs = (interpTime,wbAif,pAif,roiTac,midTime,cOneRoi,roiFlowMean,roiVbMean,wbOpt[0],weights,roiInit,roiBounds,metBool)
+		roiCv = opt.minimize_scalar(nagini.cvOptRoi,bounds=([0,15]),args=roiCvArgs,options={'maxiter':50},method='Bounded',tol=0.1)
+
 		#Run fit
-		roiArgs = (interpTime,pAif,roiTac,midTime,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0],weights,False)
+		roiArgs = (interpTime,pAif,roiTac,midTime,cOneRoi,roiFlowMean,roiCv.x,wbOpt[0],weights,False)
 		roiOpt = opt.minimize(nagini.gluAifLstPen,roiInit,args=roiArgs,method='L-BFGS-B',bounds=roiBounds,options={'maxls':100})
 
 		#Extract coefficients
-		roiFitted,roiCoef = nagini.gluAifLstPen(roiOpt.x,interpTime,pAif,roiTac,midTime,cOneRoi,roiFlowMean,args.roiPen[0],wbOpt[0],weights,True)
+		roiFitted,roiCoef = nagini.gluAifLstPen(roiOpt.x,interpTime,pAif,roiTac,midTime,cOneRoi,roiFlowMean,roiCv.x,wbOpt[0],weights,True)
 
 		#Caculate roi paramter values
 		roiVals = nagini.gluCalc(roiCoef,roiFlowMean,roiVbMean,args.blood,args.dT)
@@ -442,6 +443,7 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 		#Save common estimates
 		roiParams[roiIdx,0:4] = roiCoef
 		roiParams[roiIdx,4:14] = roiVals
+		roiParams[roiIdx,14] = roiCv.x
 
 		#Calculate residual
 		roiResid = roiTac - roiFitted
@@ -451,151 +453,9 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 		#Save residual
 		roiParams[roiIdx,-1] = roiRmsd
-
+		
 	except(RuntimeError,ValueError):
 		roiC += 1
-
-	#Don't go on if user doesn't want voxel results
-	if args.noVox == 1:
-		continue
-
-	#Create data structure for voxels within roiOpt
-	nVox = roiVoxels.shape[0]
-	roiVoxParams = np.zeros((nVox,roiParams.shape[1]))
-
-	#If region optimization was a success use it for voxel
-	if roiOpt.success is True:
-		voxInit = np.copy(roiOpt.x)
-	else:
-		voxInit = np.copy(wbOpt)
-		roiC += 1
-
-	#Set bounds for voxel
-	lBounds = []; hBounds = []; bScale = [2,2]
-	for pIdx in range(nParam):
-		if wbOpt[pIdx] > 0:
-			lBounds.append(voxInit[pIdx]/bScale[pIdx])
-			hBounds.append(voxInit[pIdx]*bScale[pIdx])
-		elif wbOpt[pIdx] < 0:
-			lBounds.append(voxInit[pIdx]*bScale[pIdx])
-			hBounds.append(voxInit[pIdx]/bScale[pIdx])
-		else:
-			lBounds.append(roiOpt.x[0][pIdx])
-			hBounds.append(roiOpt.x[1][pIdx])
-	voxBounds = np.array([lBounds,hBounds],dtype=np.float).T
-
-	#Now loop through voxels
-	for voxIdx in tqdm(range(nVox),desc='Voxels within region %i'%(roiIdx),leave=False):
-
-		#Get voxel data
-		voxTac = roiVoxels[voxIdx,:]
-		voxVb = roiVb[voxIdx]
-		voxFlow = roiFlow[voxIdx]
-
-		#Calculate concentration in compartment one
-		cOneVox = voxVb*wbAifPet
-
-		try:
-			#Run fit
-			voxArgs = (interpTime,pAif,voxTac,midTime,cOneVox,voxFlow,args.voxPen[0],voxInit[0],weights,False)
-			voxOpt = opt.minimize(nagini.gluAifLstPen,voxInit,args=voxArgs,method='L-BFGS-B',bounds=voxBounds,options={'maxls':100})
-
-			#Extract coefficients
-			voxFitted,voxCoef = nagini.gluAifLstPen(voxOpt.x,interpTime,pAif,voxTac,midTime,cOneVox,voxFlow,args.voxPen[0],voxInit[0],weights,True)
-
-			#Caculate voxel parameters
-			voxVals = nagini.gluCalc(voxCoef,voxFlow,voxVb,args.blood,args.dT)
-
-			#Save coefficinets
-			roiVoxParams[voxIdx,0:4] = voxCoef
-			roiVoxParams[voxIdx,4:14] = voxVals
-
-			#Calculate residual
-			voxResid = voxTac - voxFitted
-
-			#Calculate normalized root mean square deviation
-			voxRmsd = np.sqrt(np.sum(np.power(voxResid,2))/voxTac.shape[0]) / np.mean(voxTac)
-
-			#Save residual
-			roiVoxParams[voxIdx,-1] = voxRmsd
-
-		except(RuntimeError,ValueError):
-			voxC += 1
-
-		#Check to see if we converged
-		if voxOpt.success is False:
-			voxC += 1
-
-		#Save results from voxel loop
-		voxParams[roiMask,:] = roiVoxParams
-
-#Prepare for voxelwise writing
-if args.noVox !=1:
-
-	#Put voxelwise parameters back into image space
-	voxData = np.zeros((maskData.shape[0],maskData.shape[1],maskData.shape[2],voxParams.shape[1]))
-	voxData[maskData>0,:] = voxParams
-
-	#Fill nan logic
-	if args.noFill != 1 and voxC > 0:
-
-		#Loop through parameters that we need to replace the nans
-		for cIdx in range(0,4):
-
-			#Extract coefficinet data
-			cData = voxData[:,:,:,cIdx]
-
-			#Setup for getting nearest neighbors
-			if cIdx == 0:
-
-				#Get coordinates for nans
-				nanBool = np.isnan(cData); nNan = np.sum(nanBool)
-				cNanIdx = np.array(np.where(nanBool)).T
-
-				#Get coordinates for useable data
-				cUseIdx = np.array(np.where(np.logical_and(cData!=0.0,np.logical_not(nanBool)))).T
-
-				#Make tree for finding nearest neighbours
-				tree = spat.KDTree(cUseIdx)
-
-				#Get 6 nearest neighbors for each nan
-				nanD,nanNe = tree.query(cNanIdx,6)
-
-				#Convert neighbors to image coordinates
-				interpIdx = cUseIdx[nanNe]
-
-			#Loop through nans
-			for nIdx in range(nNan):
-
-				#Get values for neighbors
-				neVal = cData[interpIdx[nIdx,:,0],interpIdx[nIdx,:,1],interpIdx[nIdx,:,2]]
-
-				#Calculate distance weighted average
-				neAvg = np.sum(neVal/nanD[nIdx])/np.sum(1.0/nanD[nIdx])
-
-				#Replace nan with weighted average
-				cData[cNanIdx[nIdx,0],cNanIdx[nIdx,1],cNanIdx[nIdx,2]] = neAvg
-
-			#Replace data
-			voxData[:,:,:,cIdx] = cData
-
-		#Extract values that replaced the nans
-		coefReplace = voxData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2],0:4].reshape((nNan,4))
-
-		#Make images for flow and vb so we can use the same coordinates
-		flowData = np.zeros_like(maskData,dtype=np.float64); flowData[maskData>0] = flowMasked
-		vbData = np.zeros_like(maskData,dtype=np.float64); vbData[maskData>0] = vbMasked
-
-		#Extract flow and vb for nan replacement
-		flowReplace = flowData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2]].flatten()
-		vbReplace = vbData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2]].flatten()
-
-		#Calculate parameter values for replaced values
-		paramReplace = nagini.gluCalc(coefReplace,flowReplace,vbReplace,args.blood,args.dT)
-
-		#Apply replaced values
-		voxData[cNanIdx[:,0],cNanIdx[:,1],cNanIdx[:,2],4:14] = paramReplace
-
 
 #############
 ###Output!###
@@ -603,7 +463,7 @@ if args.noVox !=1:
 print('Writing out results...')
 
 #Set names for model images
-paramNames = ['alphaOne','alphaTwo','betaOne','betaTwo','gef','kOne','kTwo','kThree','kFour','cmrGlu','netEx','influx','DV','conc','nRmsd']
+paramNames = ['alphaOne','alphaTwo','betaOne','betaTwo','gef','kOne','kTwo','kThree','kFour','cmrGlu','netEx','influx','DV','conc','penalty','nRmsd']
 
 #Do the writing for parameters
 for iIdx in range(roiParams.shape[1]-1):
@@ -611,26 +471,8 @@ for iIdx in range(roiParams.shape[1]-1):
 	#Write out regional data
 	nib.Nifti1Image(roiParams[:,iIdx],affine=np.identity(4)).to_filename('%s_roiAvg_%s.nii.gz'%(args.out[0],paramNames[iIdx]))
 
-	#Write out voxelwise data
-	if args.noVox != 1:
-
-		#What to call the output image
-		pName = '%s_%s'%(args.out[0],paramNames[iIdx])
-
-		#Create image to write out
-		outImg = nib.Nifti1Image(voxData[:,:,:,iIdx],pet.affine,header=pet.header)
-
-		#Then do the writing
-		try:
-			outImg.to_filename('%s.nii.gz'%(pName))
-		except (IOError):
-			print 'ERROR: Cannot save image at %s.'%(pName)
-			sys.exit()
-
 #Write out root mean square images
 nib.Nifti1Image(roiParams[:,-1],affine=np.identity(4)).to_filename('%s_%s.nii.gz'%(args.out[0],paramNames[-1]))
-if args.noVox != 1:
-	nagini.writeMaskedImage(voxParams[:,-1],maskData.shape,maskData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[-1]))
 
 #Write out chosen arguments
 nagini.writeArgs(args,args.out[0])
@@ -642,10 +484,6 @@ try:
 
 	#Write out ROI data
 	cOut.write('%i of %i\n'%(roiC,nRoi))
-
-	#Write out voxel data if necessary
-	if args.noVox !=1:
-		cOut.write('%i of %i'%(voxC,voxParams.shape[0]))
 
 	cOut.close()
 except(IOError):
