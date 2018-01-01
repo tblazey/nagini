@@ -148,6 +148,9 @@ for petIdx in tqdm(range(nPet),desc='Calculating PVC values'):
 	rsfSmooth =  filt.gaussian_filter(rsfData,sigmas) * maskData
 	rbvData[:,:,:,petIdx] = np.ma.divide(petData[:,:,:,petIdx] * rsfData,np.ma.array(rsfSmooth,mask=rsfSmooth==0))
 
+#Don't go below zero in rbv image
+rbvData[rbvData<0.0] = 0.0
+
 #Save coefficients in the format user wants.
 if args.nii == 1:
 	avg = nib.Nifti1Image(roiCoef.reshape((nRoi,1,1,nPet)),np.identity(4))

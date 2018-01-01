@@ -22,6 +22,7 @@ argParse.add_argument('-z',help='Slice to plot in z dimension. Default is halfwa
 argParse.add_argument('-f',help='Frame to plot. Starts at 0. Default is 0',type=int,default=0)
 argParse.add_argument('-struct',help='Structural image for underlay',nargs=1,type=str)
 argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1,type=float,default=[1.0])
+argParse.add_argument('-cSize',help='Font size for colorbar title. Default is 9.0',default=[9.0],nargs=1,type=float)
 argParse.set_defaults(showMin=False,showMax=True)
 args = argParse.parse_args()
 
@@ -192,7 +193,7 @@ padLength = np.max([len(str(args.thr[0])),len(str(args.thr[1]))])*3.0
 axFour = plt.subplot(gs[3])
 pBar = mpl.colorbar.ColorbarBase(axFour,cmap=pMap,ticks=[0,1])
 if args.pTitle is not None:
-	pBar.set_label(args.pTitle[0],color='white',rotation=360,size=9,weight="bold",labelpad=-padLength)
+	pBar.set_label(args.pTitle[0],color='white',rotation=360,size=args.cSize[0],weight="bold",labelpad=-padLength)
 pBar.ax.set_position((0.775, 0.475, 0.0225, 0.2))
 pBar.set_ticklabels([1-args.thr[0],1-args.thr[1]])
 for tick in pBar.ax.yaxis.get_major_ticks():
@@ -204,7 +205,7 @@ for tick in pBar.ax.yaxis.get_major_ticks():
 axFive = plt.subplot(gs[4])
 nBar = mpl.colorbar.ColorbarBase(axFive,cmap=nDisplay,ticks=[0,1])
 if args.nTitle is not None:
-	nBar.set_label(args.nTitle[0],color='white',rotation=360,size=9,weight="bold",labelpad=-padLength)
+	nBar.set_label(args.nTitle[0],color='white',rotation=360,size=args.cSize[0],weight="bold",labelpad=-padLength)
 nBar.ax.set_position((0.775, 0.2, 0.0225, 0.2))
 nBar.set_ticklabels([1-args.thr[1],1-args.thr[0]])
 for tick in nBar.ax.yaxis.get_major_ticks():
