@@ -279,7 +279,7 @@ else:
 	metBool = False
 
 #Use cross-validation to get penalty for whole-brain curve
-wbCv = opt.minimize_scalar(nagini.cvOpt,bounds=([0,15]),args=(aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,weights,wbInit,np.array(wbBounds).T,metBool),options={'maxiter':50},method='Bounded',tol=0.1)
+wbCv = opt.minimize_scalar(nagini.cvOpt,bounds=([0,5]),args=(aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,weights,wbInit,np.array(wbBounds).T,metBool),options={'maxiter':50},method='Bounded',tol=0.1)
 
 #Arguments for whole-brain model fit
 wbArgs = (aifFunc,interpTime,wbTac,midTime,flowWb,vbWb,wbCv.x,1,weights,False,metBool)
@@ -428,7 +428,7 @@ for roiIdx in tqdm(range(nRoi),desc='Regions'):
 
 		#Run cross-valation to determine penalty
 		roiCvArgs = (interpTime,wbAif,pAif,roiTac,midTime,cOneRoi,roiFlowMean,roiVbMean,wbOpt[0],weights,roiInit,roiBounds,metBool)
-		roiCv = opt.minimize_scalar(nagini.cvOptRoi,bounds=([0,15]),args=roiCvArgs,options={'maxiter':50},method='Bounded',tol=0.1)
+		roiCv = opt.minimize_scalar(nagini.cvOptRoi,bounds=([0,5]),args=roiCvArgs,options={'maxiter':50},method='Bounded',tol=0.1)
 
 		#Run fit
 		roiArgs = (interpTime,pAif,roiTac,midTime,cOneRoi,roiFlowMean,roiCv.x,wbOpt[0],weights,False)

@@ -24,7 +24,10 @@ argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1
 argParse.add_argument('-scale',help='Scale image by specified amount',nargs=1,type=float)
 argParse.add_argument('-sci',help='Use scientific notation for colorbar labels',dest='useSci',action='store_true')
 argParse.add_argument('-custom',help='Custom color map RGB array. Overides -cmap',nargs='+',type=float) 
+argParse.add_argument('-customN',help='Number of colors in custom color map',nargs=1,type=int)
 argParse.add_argument('-cSize',help='Font size for colorbar title. Default is 9.0',default=[9.0],nargs=1,type=float)
+argParse.add_argument('-white',help='White background figure. Default is black.',action='store_true')
+argParse.add_argument('-noBar',help='Do not show colorbar',action='store_true')
 argParse.set_defaults(showMin=False,showMax=True,useSci=False)
 args = argParse.parse_args()
 
@@ -41,6 +44,12 @@ from matplotlib.colors import LinearSegmentedColormap
 
 #Change default math font
 mpl.rcParams['mathtext.default'] = 'regular'
+
+#Setup colors
+if args.white is False:
+	faceColor = 'black'; textColor = 'white'
+else:
+	faceColor = 'white'; textColor = 'black'
 
 #Load in image header
 img = nagini.loadHeader(args.img[0])
@@ -110,8 +119,15 @@ if args.struct is not None:
 		structData = structData[:,:,:,0]
 		print 'Warning: Structural image is four dimensional. Using first frame...'
 
+	#Get a masked version
+	structMasked = np.ma.masked_where(structData==0,structData)
+
 	#Get thresholds for structural image
 	structThr = np.percentile(structData[structData!=0],[2,98])
+
+	#Get colormap for structural image
+	sMap = plt.get_cmap('gray')
+	sMap.set_bad(faceColor); sMap.set_under(faceColor); sMap.set_over(sMap(255))
 		
 #Mask image
 maskedData = np.ma.masked_where(imgData==args.mVal,imgData)
@@ -131,27 +147,27 @@ if args.custom is None:
 else:
 	rgbArray = np.array(args.custom)
 	rgbArray = rgbArray.reshape((rgbArray.shape[0]/3,3))
-	cMap = LinearSegmentedColormap.from_list('map',rgbArray,N=100)
-cMap.set_bad('black',alpha=0)
+	cMap = LinearSegmentedColormap.from_list('map',rgbArray,N=args.customN[0])
+cMap.set_bad(faceColor,alpha=0)
 
 #Decide whether or not to show values below minimum
 if args.showMin is False:
-	cMap.set_under('black',alpha=0)
+	cMap.set_under(faceColor,alpha=0)
 else:
 	cMap.set_under(cMap(0))
 	
 #Do the same thing for above maximum
 if args.showMax is False:
-	cMap.set_over('black',alpha=0)
+	cMap.set_over(faceColor,alpha=0)
 else:
 	cMap.set_over(cMap(255))
 
 #Make figure
-fig = plt.figure(facecolor='black',figsize=(10,5),frameon=False)
+fig = plt.figure(figsize=(10,5),frameon=False,facecolor=faceColor)
 
 #Add a title to the figure
 if args.pTitle is not None:
-	plt.suptitle(args.pTitle[0],color='white',x=0.44,y=0.75,size=14,weight='bold')
+	plt.suptitle(args.pTitle[0],color=textColor,x=0.44,y=0.75,size=14,weight='bold')
 
 #Make the grid for the plotting
 gs = mpl.gridspec.GridSpec(1, 4,width_ratios=[0.33,0.33,0.33,0.01])
@@ -162,7 +178,7 @@ axisLimits = np.max(img.shape)
 #Add sagittal view
 axOne = plt.subplot(gs[0])  
 if args.struct is not None: 
-	 plt.imshow(structData[plotDims[0],:,:].T,cmap="gray",vmin=structThr[0],vmax=structThr[1])
+	 plt.imshow(structMasked[plotDims[0],:,:].T,cmap=sMap,vmin=structThr[0],vmax=structThr[1])
 imOne = plt.imshow(maskedData[plotDims[0],:,:].T,cmap=cMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axOneP = axOne.get_position()
@@ -171,7 +187,7 @@ axOne.set_position((0.115,0.10,axOneP.width,axOneP.height))
 #Add horiziontal view
 axTwo = plt.subplot(gs[1])
 if args.struct is not None: 
-	 plt.imshow(np.rot90(structData[:,:,plotDims[2]],3),cmap="gray",vmin=structThr[0],vmax=structThr[1])
+	 plt.imshow(np.rot90(structMasked[:,:,plotDims[2]],3),cmap=sMap,vmin=structThr[0],vmax=structThr[1])
 imTwo = plt.imshow(np.rot90(maskedData[:,:,plotDims[2]],3),cmap=cMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axTwoP = axTwo.get_position()
@@ -180,30 +196,31 @@ axTwo.set_position((0.35,0.05,axTwoP.width,axTwoP.height))
 #Add coronal view
 axThree = plt.subplot(gs[2])
 if args.struct is not None: 
-	 plt.imshow(np.rot90(structData[:,plotDims[1],:],3),cmap="gray",vmin=structThr[0],vmax=structThr[1])
+	 plt.imshow(np.rot90(structMasked[:,plotDims[1],:],3),cmap=sMap,vmin=structThr[0],vmax=structThr[1])
 imThree = plt.imshow(np.rot90(maskedData[:,plotDims[1],:],3),cmap=cMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axThreeP = axThree.get_position()
 axThree.set_position((0.56,0.09,axThreeP.width,axThreeP.height))
 
 #Add in colorbar
-axFour = plt.subplot(gs[3])
-cBar = mpl.colorbar.ColorbarBase(axFour,cmap=cMap,ticks=[0,0.5,1])
-if args.cTitle is not None:
-	cBar.set_label(r'$%s$'%(args.cTitle[0]),color='white',rotation='90',size=args.cSize[0],weight="bold",labelpad=-65)
-cBar.ax.set_position((0.775, 0.29, 0.025, 0.35))
-midTick = (args.thr[1] - args.thr[0]) / 2.0 + args.thr[0]
-if args.useSci is True:
-	cBar.set_ticklabels(['%.2e'%(args.thr[0]),'%.2e'%(midTick),'%.2e'%(args.thr[1])])
-else:
-	cBar.set_ticklabels([np.round(args.thr[0],2),np.round(midTick,2),np.round(args.thr[1],2)])
-for tick in cBar.ax.yaxis.get_major_ticks():
-    tick.label2.set_color('white')
-    tick.label2.set_weight('bold')
-    tick.label2.set_size(10)
+if args.noBar is False:
+	axFour = plt.subplot(gs[3])
+	cBar = mpl.colorbar.ColorbarBase(axFour,cmap=cMap,ticks=[0,0.5,1])
+	if args.cTitle is not None:
+		cBar.set_label(r'$%s$'%(args.cTitle[0]),color=textColor,rotation='90',size=args.cSize[0],weight="bold",labelpad=-65)
+	cBar.ax.set_position((0.775, 0.29, 0.025, 0.35))
+	midTick = (args.thr[1] - args.thr[0]) / 2.0 + args.thr[0]
+	if args.useSci is True:
+		cBar.set_ticklabels(['%.2e'%(args.thr[0]),'%.2e'%(midTick),'%.2e'%(args.thr[1])])
+	else:
+		cBar.set_ticklabels([np.round(args.thr[0],2),np.round(midTick,2),np.round(args.thr[1],2)])
+	for tick in cBar.ax.yaxis.get_major_ticks():
+	    tick.label2.set_color(textColor)
+	    tick.label2.set_weight('bold')
+	    tick.label2.set_size(10)
 
 #Write out figure
-plt.savefig(args.out[0],transparent=True,facecolor='black',bbox_inches='tight')
+plt.savefig(args.out[0],transparent=True,bbox_inches='tight',facecolor=faceColor)
 
 #Close all figures
 plt.close('all')
