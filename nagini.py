@@ -359,17 +359,15 @@ def flowTwo(aifTime,cAif,petTac,petTime,petMask):
 	#Return function
 	return flowPred
 
-def flowThreeDelay(aifCoef,aifScale,aifTime,petTac,petTime,kernel=None):
+def flowThreeDelay(aifFunc,aifTime,petTac,petTime,kernel=None):
 
 	"""
 
 	Parameters
 	----------
 
-	aifCoef: array
-	   An q length array of coefficients for Golish AIF model
-	aifScale: float
-	   A scale factor for AIF
+	aifFunc: function
+	  Function or interpolating AIF
 	aifTime: array
 	   A n length array of times to samples AIF at
 	petTac: array
@@ -426,10 +424,7 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,petTac,petTime,kernel=None):
 		delta = param[2] * 10
 
 		#Calculate Aif
-		cAif = golishFunc()(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5])
-
-		#Scale AIF
-		cAif *= aifScale
+		cAif = aifFunc(aifTime+delta)
 
 		#Make valid AIF mask
 		aifMask = (aifTime+delta)<=aifTime[-1]
@@ -460,17 +455,15 @@ def flowThreeDelay(aifCoef,aifScale,aifTime,petTac,petTime,kernel=None):
 	#Return function
 	return flowPred
 
-def flowFour(aifCoef,aifScale,aifTime,petTac,petTime):
+def flowFour(aifFunc,aifTime,petTac,petTime):
 
 	"""
 
 	Parameters
 	----------
 
-	aifCoef: array
-	   An q length array of coefficients for Golish AIF model
-	aifScale: float
-	   A scale factor for AIF
+	aifFunc: func
+	   Function for interpolating AIF
 	aifTime: array
 	   A n length array of times to samples AIF at
 	petTac: array
@@ -527,13 +520,10 @@ def flowFour(aifCoef,aifScale,aifTime,petTac,petTime):
 		tau = param[3] * 5.0
 
 		#Calculate Aif
-		cAif = golishFunc()(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5])
+		cAif,cAifD = aifFunc(aifTime+delta,deriv=True)
 
 		#Correct for disperison
-		cAif += golishDerivFunc()(aifTime+delta,aifCoef[0],aifCoef[1],aifCoef[2],aifCoef[3],aifCoef[4],aifCoef[5]) * tau
-
-		#Scale AIF
-		cAif *= aifScale
+		cAif += cAifD * tau
 
 		#Make valid AIF mask
 		aifMask = (aifTime+delta)<=aifTime[-1]

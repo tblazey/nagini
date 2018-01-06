@@ -30,7 +30,9 @@ argParse.add_argument('out',help='Root for outputed files',nargs=1,type=str)
 argParse.add_argument('-brain',help='Brain mask in PET space',nargs=1,type=str)
 argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform whole-brain estimation')
 argParse.add_argument('-dcv',action='store_const',const=1,help='AIF is from a DCV file, not a CRV file. Using -noDisp or -noDelay is recommended.')
-argParse.add_argument('-kernel',nargs=1,help='Deconvolution kernel for aif. Using along with -noDisp is strongly recommended.')
+argParse.add_argument('-kernel',nargs=1,help='Deconvolution kernel for AIF fit. Has no effect with -spline. Using along with -noDisp is strongly recommended.')
+argParse.add_argument('-spline',help='Use a restricted cubic spline to fit AIF. Does not use deconvolution kernel.',action='store_true')
+argParse.add_argument('-nKnots',nargs=1,help='Number of knots for restricted cubic spline. Defalut is number of data points.',type=int)
 argParse.add_argument('-noDisp',action='store_const',const=1,help='Do not include AIF dispersion term in model.')
 argParse.add_argument('-noDelay',action='store_const',const=1,help='Do not include AIF delay term in model. Implies -noDisp.')
 argParse.add_argument('-fModel',action='store_const',const=1,help='Does delay and/or dispersion estimate at each voxel.')
@@ -54,6 +56,7 @@ for bound in [args.fBound,args.lBound,args.dBound,args.tBound]:
 import numpy as np, nibabel as nib, nagini, sys, scipy.optimize as opt
 import scipy.interpolate as interp, matplotlib.pyplot as plt, matplotlib.gridspec as grid
 from tqdm import tqdm
+from sklearn import linear_model
 
 #Ignore invalid  and overflow warnings
 np.seterr(invalid='ignore',over='ignore')
@@ -144,22 +147,83 @@ else:
 	#Add in decay correction to PET start
 	aifC *= np.exp(np.log(2)/122.24*info[0,0])
 
-#Create inits and bounds for AIF fit
-initAif = [0.019059,0.0068475,2.937158,6.030855,35.5553015,11.652845]
-lBoundAif = [0,0,0,0,0,0]
-hBoundAif= [0.05,0.01,10,20,100,300]
-boundsAif = [lBoundAif,hBoundAif]
+#Decide how to fit AIF
+if args.spline is False:
 
-#Create normalized AIF for fitting
-aifScale = np.sum(aifC)
-aifNorm = aifC / aifScale
+	#Create inits and bounds for AIF fit
+	initAif = [0.019059,0.0068475,2.937158,6.030855,35.5553015,11.652845]
+	lBoundAif = [0,0,0,0,0,0]
+	hBoundAif= [0.05,0.01,10,20,100,300]
+	boundsAif = [lBoundAif,hBoundAif]
 
-#Get function for fitting aif
-golishFitFunc = nagini.golishFunc(kernel)
+	#Create normalized AIF for fitting
+	aifScale = np.sum(aifC)
+	aifNorm = aifC / aifScale
 
-#Run fit
-aifFit,aifCov = opt.curve_fit(golishFitFunc,aifTime,aifNorm,initAif,bounds=boundsAif)
+	#Get function for fitting aif
+	golishFitFunc = nagini.golishFunc(kernel)
 
+	#Run fit
+	aifFit,aifCov = opt.curve_fit(golishFitFunc,aifTime,aifNorm,initAif,bounds=boundsAif)
+
+	#Create hacky AIF wrapper function
+	def wrapFunc(cMax,cZero,alpha,beta,tZero,tau,scale):
+		def interpFunc(time,deriv=False):
+			if deriv is False:
+				return nagini.golishFunc()(time,cMax,cZero,alpha,beta,tZero,tau)*scale
+			else:
+				return nagini.golishFunc()(time,cMax,cZero,alpha,beta,tZero,tau)*scale,nagini.golishDerivFunc()(time,cMax,cZero,alpha,beta,tZero,tau)*scale
+		return interpFunc
+
+	#Apply wrapper function
+	aifFunc = wrapFunc(aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5],aifScale)
+
+else:
+	
+	#Get basis for AIF spline
+	if args.nKnots is None:
+		nKnots = aifC.shape[0]
+	else:
+		nKnots = args.nKnots[0]
+	aifKnots = nagini.knotLoc(aifTime,nKnots,bounds=[5,95])
+	aifBasis = nagini.rSplineBasis(aifTime,aifKnots)
+
+	#Use scikit learn to do a initial bayesian ridge fit
+	bModel = linear_model.BayesianRidge(fit_intercept=True)
+	initFit = bModel.fit(aifBasis[:,1::],aifC)
+	initCoefs = np.concatenate((initFit.intercept_[np.newaxis],initFit.coef_))
+
+	#Compute absolute studentized residuals
+	initFitted = np.dot(aifBasis,initCoefs)
+	initResid = aifC - initFitted
+	initHat = np.diag(aifBasis.dot(np.linalg.inv(aifBasis.T.dot(aifBasis)).dot(aifBasis.T)))
+	initVar = 1.0/(aifC.shape[0]-aifBasis.shape[1])*np.sum(np.power(initResid,2))
+	initStudent = np.abs(initResid / np.sqrt(initVar*(1-initHat)))
+
+	#Compute masks for high residual points
+	residMask = initStudent < 2.5
+
+	#Rerun fit without high residual points
+	bFit = bModel.fit(aifBasis[residMask,1::],aifC[residMask])
+	aifCoefs = np.concatenate((bFit.intercept_[np.newaxis],bFit.coef_))
+	
+	#Make a quick wrapper function for returning spline results
+	def wrapFunc(coefs,knots):
+		def interpFunc(time,deriv=False):
+			if deriv is False:
+				basis = nagini.rSplineBasis(time,knots)
+				interp = np.dot(basis,coefs)
+				return interp
+			else:
+				basis,basisD = nagini.rSplineBasis(time,knots,dot=True)
+				interp = np.dot(basis,coefs)
+				deriv = np.dot(basisD,coefs)
+				return interp,deriv
+		return interpFunc
+
+	#Apply wrapper function
+	aifFunc = wrapFunc(aifCoefs,aifKnots)
+			
 #Make sure we have uniform AIF sampling
 sampTime = np.min(np.diff(aifTime))
 
@@ -181,9 +245,9 @@ wbTac = np.mean(petMasked,axis=0)
 wbInit = [1,1]; wbBounds = np.array([[0.2,5.0],[0.2,5.0]]); wbScales = np.array([0.007,0.52])
 if args.noDelay == 1:
 
-	#Interpolate AIF with Golish model fit
-	interpAif = nagini.golishFunc()(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*aifScale
-
+	#Interpolate AIF
+	interpAif = aifFunc(interpTime)
+	
 	#Get mask for useable PET data
 	wbPetMask = np.logical_and(midTime>=interpTime[0],midTime<=interpTime[-1])
 
@@ -193,7 +257,7 @@ if args.noDelay == 1:
 elif args.noDisp == 1:
 
 	#Model with just delay
-	wbFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,wbTac,midTime)
+	wbFunc = nagini.flowThreeDelay(aifFunc,interpTime,wbTac,midTime)
 
 	#Add in starting point, bounds, and scale
 	if args.kernel is None:
@@ -202,9 +266,8 @@ elif args.noDisp == 1:
 		wbInit.append(0); wbBounds = np.vstack((wbBounds,[-2,2]));
 	wbScales = np.hstack((wbScales,[10]))
 else:
-
 	#Model with delay and dispersion:
-	wbFunc = nagini.flowFour(aifFit,aifScale,interpTime,wbTac,midTime)
+	wbFunc = nagini.flowFour(aifFunc,interpTime,wbTac,midTime)
 
 	#Add in starting points, bounds, and scales
 	if args.kernel is None:
@@ -220,8 +283,11 @@ else:
 	weights = 1.0 / (midTime*np.log(midTime[-1]/midTime[0]))
 	weights /= np.sum(weights*info[:,2])
 
-#Attempt to fit model to whole-brain curve
-wbOpt = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.001,'maxls':100})
+#Start out fitting with a very lenient tolerance
+wbStart = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.1,'maxls':100})
+
+#Use first fit to initilize with more reasonable tolerance
+wbOpt = opt.minimize(wbFunc,wbStart.x,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.001,'maxls':100})
 
 #Make sure we converged before moving on
 if wbOpt.success is False:
@@ -273,12 +339,18 @@ try:
 	axOne.set_title('Whole-Brain Time Activity Curve')
 	axOne.legend(loc='upper left')
 
-	#Get plain old input function fitted values
-	aifFitted = golishFitFunc(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5]) * aifScale
+	#Get plain old input function fitted values. Without spline, this  applies the kernel so it "fits" the curve
+	if args.spline is False:
+		aifFitted = golishFitFunc(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5]) * aifScale
+	else:
+		aifFitted = aifFunc(interpTime)
 	
 	#Make input function plot
 	axTwo = plt.subplot(gs[0,1])
-	axTwo.scatter(aifTime,aifC,s=40,c="black")
+	if args.spline is True:
+		axTwo.scatter(aifTime,aifC,s=40,c=np.where(residMask,'black','red'))
+	else:
+		axTwo.scatter(aifTime,aifC,s=40,c="black")
 	axTwo.plot(interpTime,aifFitted,linewidth=5,label='Model Fit')
 	axTwo.set_xlabel('Time (seconds)')
 	axTwo.set_ylabel('Counts')
@@ -287,36 +359,31 @@ try:
 	#Logic for AIF correction
 	if args.noDelay != 1 or args.kernel is not None:
 
-		#Get input function correcte for delay and possibly dispersion. Recognizes kernel if necessary
+		#Get input function corrected for delay and possibly dispersion.
 		if  args.noDelay != 1:
 
-			#Interpolate input function and correct for delay
-			cAif = nagini.golishFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])
-
-			#Correct for dispersion if necessary
+			#Interpolate input function and correct for delay and despersion if necessary
 			if args.noDisp != 1:
-				cAif += nagini.golishDerivFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
+				cAif,cAifD = aifFunc(interpTime+wbFit[2],deriv=True); cAif += cAifD*wbFit[3]
 				lLabel = 'Delay+Disp Corrected'
 			else:
+				cAif = aifFunc(interpTime+wbFit[2])
 				lLabel = 'Delay Corrected'
 
 			#If we used kernel, make sure we say so
-			if args.kernel is not None:
+			if args.kernel is not None and args.spline is False:
 				lLabel += ' + Kernel'
 
 		#Only kernel
-		if args.noDelay == 1 and args.kernel is not None:
+		if args.noDelay == 1 and args.kernel is not None and spline is False:
 
 			#Get AIF corrected with kernel
-			cAif = nagini.golishFunc(None)(interpTime,aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])	
+			cAif = aifFunc(interpTime)	
 			lLabel = "Kernel Corrected"
-
-		#Apply scale
-		cAif *= aifScale
 
 		#Create input function plot
 		axTwo.plot(interpTime[wbAifMask],cAif[wbAifMask],linewidth=5,c='green',label=lLabel)
-
+	
 	#Make sure we have legend for input function plot
 	axTwo.legend(loc='lower right',fontsize=10)
 
@@ -380,14 +447,10 @@ fitParams = np.zeros((nVox,nParam+1))
 if args.fModel != 1 and args.noDelay !=1:
 
 	#Get shifted aif
-	voxAif = nagini.golishFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])
-
-	#Correct for dispersion if necessary
 	if args.noDisp != 1:
-		voxAif += nagini.golishDerivFunc(None)(interpTime+wbFit[2],aifFit[0],aifFit[1],aifFit[2],aifFit[3],aifFit[4],aifFit[5])*wbFit[3]
-
-	#Apply scale to AIF
-	voxAif *= aifScale
+		voxAif,voxAifD = aifFunc(interpTime+wbFit[2],deriv=True); voxAif += voxAifD*wbFit[3]
+	else:
+		voxAif = aifFunc(interpTime+wbFit[2])
 elif args.noDelay == 1:
 	voxAif = interpAif
 
@@ -402,9 +465,9 @@ for voxIdx in tqdm(range(nVox)):
 	if args.fModel == 1 and args.noDelay !=1:
 
 		if args.noDisp == 1:
-			optFunc = nagini.flowThreeDelay(aifFit,aifScale,interpTime,voxTac,midTime)
+			optFunc = nagini.flowThreeDelay(aifFunc,interpTime,voxTac,midTime)
 		else:
-			optFunc = nagini.flowFour(aifFit,aifScale,interpTime,voxTac,midTime)
+			optFunc = nagini.flowFour(aifFunc,interpTime,voxTac,midTime)
 	else:
 		optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],voxTac,midTime,wbPetMask)
 
