@@ -20,6 +20,7 @@ argParse.add_argument('-y',help='Slice to plot in y dimension. Default is halfwa
 argParse.add_argument('-z',help='Slice to plot in z dimension. Default is halfway point. Starts at 0',type=int)
 argParse.add_argument('-f',help='Frame to plot. Starts at 0. Default is 0',type=int,default=0)
 argParse.add_argument('-struct',help='Structural image for underlay',nargs=1,type=str)
+argParse.add_argument('-sThr',help='Minimum and maximum for structural image. Default is 2nd and 98th percentile',nargs=2,type=float)
 argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1,type=float,default=[1.0])
 argParse.add_argument('-scale',help='Scale image by specified amount',nargs=1,type=float)
 argParse.add_argument('-sci',help='Use scientific notation for colorbar labels',dest='useSci',action='store_true')
@@ -27,15 +28,17 @@ argParse.add_argument('-custom',help='Custom color map RGB array. Overides -cmap
 argParse.add_argument('-customN',help='Number of colors in custom color map',nargs=1,type=int)
 argParse.add_argument('-cSize',help='Font size for colorbar title. Default is 9.0',default=[9.0],nargs=1,type=float)
 argParse.add_argument('-white',help='White background figure. Default is black.',action='store_true')
+argParse.add_argument('-crop',help='Crop image based on structural image when taking shots',action='store_true')
 argParse.add_argument('-noBar',help='Do not show colorbar',action='store_true')
 argParse.set_defaults(showMin=False,showMax=True,useSci=False)
 args = argParse.parse_args()
 
 #Make sure user min is above maximum
-if args.thr is not None:
-	if args.thr[0] >= args.thr[1]:
-		print 'Error: Minimum value of %f is not above maximum value of %f'%(args.thr[0],args.thr[1])
-		sys.exit()
+for thr in [args.thr,args.sThr]:
+	if thr is not None:
+		if thr[0] >= thr[1]:
+			print 'Error: Minimum value of %f is not above maximum value of %f'%(thr[0],thr[1])
+			sys.exit()
 
 #Load in the libraries we will need
 import numpy as np, matplotlib as mpl, matplotlib.pyplot as plt, nibabel as nib, nagini, sys
@@ -119,11 +122,38 @@ if args.struct is not None:
 		structData = structData[:,:,:,0]
 		print 'Warning: Structural image is four dimensional. Using first frame...'
 
+	#Should we crop?
+	if args.crop is True:
+	
+		#Get indices for non-zero rows, columns, and slices
+		xIdx = np.where(np.sum(structData,axis=(1,2))>0)
+		yIdx = np.where(np.sum(structData,axis=(0,2))>0)
+		zIdx = np.where(np.sum(structData,axis=(0,1))>0)
+
+		#Get cropping indicies
+		minIdx = np.zeros(3,dtype=np.int); maxIdx = np.zeros(3,dtype=np.int); idx = 0
+		for idxs in [xIdx,yIdx,zIdx]:
+			minIdx[idx] = np.max([0,np.min(idxs)-2])
+			maxIdx[idx] = np.min([struct.shape[idx],np.max(idxs)+2])
+			idx += 1
+
+		#Apply cropping
+		imgData = imgData[minIdx[0]:maxIdx[0],minIdx[1]:maxIdx[1],minIdx[2]:maxIdx[2]]
+		structData = structData[minIdx[0]:maxIdx[0],minIdx[1]:maxIdx[1],minIdx[2]:maxIdx[2]]
+
+		#Update slices
+		plotDims[0] -= minIdx[0]
+		plotDims[1] -= minIdx[1]
+		plotDims[2] -= minIdx[2]
+
 	#Get a masked version
 	structMasked = np.ma.masked_where(structData==0,structData)
 
 	#Get thresholds for structural image
-	structThr = np.percentile(structData[structData!=0],[2,98])
+	if args.sThr is None:
+		structThr = np.percentile(structData[structData!=0],[2,98])
+	else:
+		structThr = [args.sThr[0],args.sThr[1]]
 
 	#Get colormap for structural image
 	sMap = plt.get_cmap('gray')
@@ -170,10 +200,10 @@ if args.pTitle is not None:
 	plt.suptitle(args.pTitle[0],color=textColor,x=0.44,y=0.75,size=14,weight='bold')
 
 #Make the grid for the plotting
-gs = mpl.gridspec.GridSpec(1, 4,width_ratios=[0.33,0.33,0.33,0.01])
+gs = mpl.gridspec.GridSpec(1, 4,width_ratios=[0.33,0.33,0.33,0.2])
 
 #Figure of the x and y axis limits
-axisLimits = np.max(img.shape)
+axisLimits = np.max(imgData.shape)
 
 #Add sagittal view
 axOne = plt.subplot(gs[0])  
@@ -182,7 +212,7 @@ if args.struct is not None:
 imOne = plt.imshow(maskedData[plotDims[0],:,:].T,cmap=cMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axOneP = axOne.get_position()
-axOne.set_position((0.115,0.10,axOneP.width,axOneP.height))
+axOne.set_position((0.115,0.05,axOneP.width,axOneP.height))
 
 #Add horiziontal view
 axTwo = plt.subplot(gs[1])
@@ -191,7 +221,7 @@ if args.struct is not None:
 imTwo = plt.imshow(np.rot90(maskedData[:,:,plotDims[2]],3),cmap=cMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axTwoP = axTwo.get_position()
-axTwo.set_position((0.35,0.05,axTwoP.width,axTwoP.height))
+axTwo.set_position((0.3725,0.025,axTwoP.width,axTwoP.height))
 
 #Add coronal view
 axThree = plt.subplot(gs[2])
@@ -200,7 +230,7 @@ if args.struct is not None:
 imThree = plt.imshow(np.rot90(maskedData[:,plotDims[1],:],3),cmap=cMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axThreeP = axThree.get_position()
-axThree.set_position((0.56,0.09,axThreeP.width,axThreeP.height))
+axThree.set_position((0.575,0.05,axThreeP.width,axThreeP.height))
 
 #Add in colorbar
 if args.noBar is False:

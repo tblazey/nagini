@@ -23,6 +23,8 @@ argParse.add_argument('-f',help='Frame to plot. Starts at 0. Default is 0',type=
 argParse.add_argument('-struct',help='Structural image for underlay',nargs=1,type=str)
 argParse.add_argument('-alpha',help='Alpha value for plot, Default is 1',nargs=1,type=float,default=[1.0])
 argParse.add_argument('-cSize',help='Font size for colorbar title. Default is 9.0',default=[9.0],nargs=1,type=float)
+argParse.add_argument('-white',help='Use white background instead of black',action='store_true')
+argParse.add_argument('-crop',help='Crop image based on structural image when taking shots',action='store_true')
 argParse.set_defaults(showMin=False,showMax=True)
 args = argParse.parse_args()
 
@@ -47,12 +49,18 @@ if pImg.shape != nImg.shape:
 #Check to make sure image is three or four dimensions
 nImgDim = len(pImg.shape)
 if nImgDim !=3 and nImgDim !=4:
-	print 'Error: P-value images rae three or four dimensional'
+	print 'Error: P-value images are three or four dimensional'
 	sys.exit()
 
 #Get the actual image data
 pData = pImg.get_data()
 nData = nImg.get_data()
+
+#Setup colors
+if args.white is False:
+	faceColor = 'black'; textColor = 'white'
+else:
+	faceColor = 'white'; textColor = 'black'
 
 #If we have a four dimensional image, extract the slice we want.
 if nImgDim == 4:
@@ -111,8 +119,37 @@ if args.struct is not None:
 		structData = structData[:,:,:,0]
 		print 'Warning: Structural image is four dimensional. Using first frame...'
 
+		#Should we crop?
+		if args.crop is True:
+	
+			#Get indices for non-zero rows, columns, and slices
+			xIdx = np.where(np.sum(structData,axis=(1,2))>0)
+			yIdx = np.where(np.sum(structData,axis=(0,2))>0)
+			zIdx = np.where(np.sum(structData,axis=(0,1))>0)
+
+			#Get cropping indicies
+			minIdx = np.zeros(3,dtype=np.int); maxIdx = np.zeros(3,dtype=np.int); idx = 0
+			for idxs in [xIdx,yIdx,zIdx]:
+				minIdx[idx] = np.max([0,np.min(idxs)-1])
+				maxIdx[idx] = np.min([struct.shape[idx],np.max(idxs)+1])
+				idx += 1
+
+			#Apply cropping
+			pData = pData[minIdx[0]:maxIdx[0],minIdx[1]:maxIdx[1],minIdx[2]:maxIdx[2]]
+			nData = nData[minIdx[0]:maxIdx[0],minIdx[1]:maxIdx[1],minIdx[2]:maxIdx[2]]
+			structData = structData[minIdx[0]:maxIdx[0],minIdx[1]:maxIdx[1],minIdx[2]:maxIdx[2]]
+
+			#Update slices
+			plotDims[0] -= minIdx[0]
+			plotDims[1] -= minIdx[1]
+			plotDims[2] -= minIdx[2]
+
 	#Get thresholds for structural image
 	structThr = np.percentile(structData[structData!=0],[2,98])
+
+	#Get colormap for structural image
+	sMap = plt.get_cmap('gray')
+	sMap.set_bad(faceColor); sMap.set_under(faceColor); sMap.set_over(sMap(255))
 		
 #Mask images
 pMasked = np.ma.masked_where(pData==args.mVal,pData)
@@ -131,73 +168,73 @@ nDisplay = mpl.colors.ListedColormap(pMap(np.arange(256))[:,0:3] * -1 + 1)
 for cMap in [pMap,nMap]:
 
 	#Don't show masked values 
-	cMap.set_bad('black',alpha=0)
+	cMap.set_bad(faceColor,alpha=0)
 
 	#Decide whether or not to show values below minimum
 	if args.showMin is False:
-		cMap.set_under('black',alpha=0)
+		cMap.set_under(faceColor,alpha=0)
 	else:
 		cMap.set_under(cMap(0))
 	
 	#Do the same thing for above maximum
 	if args.showMax is False:
-		cMap.set_over('black',alpha=0)
+		cMap.set_over(faceColor,alpha=0)
 	else:
 		cMap.set_over(cMap(255))
 
 #Make figure
-fig = plt.figure(facecolor='black',figsize=(10,5))
+fig = plt.figure(facecolor=faceColor,figsize=(10,5))
 
 #Add a title to the figure
 if args.fTitle is not None:
-	plt.suptitle(args.fTitle[0],color='white',x=0.44,y=0.72,size=14,weight='bold')
+	plt.suptitle(args.fTitle[0],color=textColor,x=0.44,y=0.72,size=14,weight='bold')
 
 #Make the grid for the plotting
 gs = mpl.gridspec.GridSpec(1, 5,width_ratios=[0.33,0.33,0.33,0.01,0])
 
 #Figure of the x and y axis limits
-axisLimits = np.max(pImg.shape)
+axisLimits = np.max(pMasked.shape)
 
 #Add sagittal view
 axOne = plt.subplot(gs[0])  
 if args.struct is not None: 
-	 plt.imshow(structData[plotDims[0],:,:].T,cmap="gray",vmin=structThr[0],vmax=structThr[1])
+	 plt.imshow(structData[plotDims[0],:,:].T,cmap=sMap,vmin=structThr[0],vmax=structThr[1])
 pOne = plt.imshow(pMasked[plotDims[0],:,:].T,cmap=pMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 nOne = plt.imshow(nMasked[plotDims[0],:,:].T,cmap=nMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axOneP = axOne.get_position()
-axOne.set_position((0.115,0.10,axOneP.width,axOneP.height))
+axOne.set_position((0.115,0.05,axOneP.width,axOneP.height))
 
 #Add horiziontal view
 axTwo = plt.subplot(gs[1])
 if args.struct is not None: 
-	 plt.imshow(np.rot90(structData[:,:,plotDims[2]],3),cmap="gray",vmin=structThr[0],vmax=structThr[1])
-pTwo = plt.imshow(pMasked[:,:,plotDims[2]].T,cmap=pMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
-nTwo = plt.imshow(nMasked[:,:,plotDims[2]].T,cmap=nMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
+	 plt.imshow(np.rot90(structData[:,:,plotDims[2]],3),cmap=sMap,vmin=structThr[0],vmax=structThr[1])
+pTwo = plt.imshow(np.rot90(pMasked[:,:,plotDims[2]],3),cmap=pMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
+nTwo = plt.imshow(np.rot90(nMasked[:,:,plotDims[2]],3),cmap=nMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axTwoP = axTwo.get_position()
-axTwo.set_position((0.35,0.05,axTwoP.width,axTwoP.height))
+axTwo.set_position((0.3725,0.025,axTwoP.width,axTwoP.height))
 
 #Add coronal view
 axThree = plt.subplot(gs[2])
 if args.struct is not None: 
-	 plt.imshow(np.rot90(structData[:,plotDims[1],:],3),cmap="gray",vmin=structThr[0],vmax=structThr[1])
-pThree = plt.imshow(pMasked[:,plotDims[1],:].T,cmap=pMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
-nThree = plt.imshow(nMasked[:,plotDims[1],:].T,cmap=nMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
+	 plt.imshow(np.rot90(structData[:,plotDims[1],:],3),cmap=sMap,vmin=structThr[0],vmax=structThr[1])
+pThree = plt.imshow(np.rot90(pMasked[:,plotDims[1],:],3),cmap=pMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
+nThree = plt.imshow(np.rot90(nMasked[:,plotDims[1],:],3),cmap=nMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 plt.xlim([0,axisLimits]); plt.ylim([0,axisLimits]); plt.axis('off')
 axThreeP = axThree.get_position()
-axThree.set_position((0.56,0.09,axThreeP.width,axThreeP.height))
+axThree.set_position((0.575,0.05,axThreeP.width,axThreeP.height))
 
 #Add in positive colorbar
-padLength = np.max([len(str(args.thr[0])),len(str(args.thr[1]))])*3.0
+padLength = np.max([len(str(args.thr[0])),len(str(args.thr[1]))])*0.75
 axFour = plt.subplot(gs[3])
 pBar = mpl.colorbar.ColorbarBase(axFour,cmap=pMap,ticks=[0,1])
 if args.pTitle is not None:
-	pBar.set_label(args.pTitle[0],color='white',rotation=360,size=args.cSize[0],weight="bold",labelpad=-padLength)
+	pBar.set_label(args.pTitle[0],color=textColor,rotation=360,size=args.cSize[0],weight="bold",labelpad=padLength)
 pBar.ax.set_position((0.775, 0.475, 0.0225, 0.2))
 pBar.set_ticklabels([1-args.thr[0],1-args.thr[1]])
 for tick in pBar.ax.yaxis.get_major_ticks():
-    tick.label2.set_color('white')
+    tick.label2.set_color(textColor)
     tick.label2.set_weight('bold')
     tick.label2.set_size(10)
 
@@ -205,16 +242,16 @@ for tick in pBar.ax.yaxis.get_major_ticks():
 axFive = plt.subplot(gs[4])
 nBar = mpl.colorbar.ColorbarBase(axFive,cmap=nDisplay,ticks=[0,1])
 if args.nTitle is not None:
-	nBar.set_label(args.nTitle[0],color='white',rotation=360,size=args.cSize[0],weight="bold",labelpad=-padLength)
+	nBar.set_label(args.nTitle[0],color=textColor,rotation=360,size=args.cSize[0],weight="bold",labelpad=padLength)
 nBar.ax.set_position((0.775, 0.2, 0.0225, 0.2))
 nBar.set_ticklabels([1-args.thr[1],1-args.thr[0]])
 for tick in nBar.ax.yaxis.get_major_ticks():
-    tick.label2.set_color('white')
+    tick.label2.set_color(textColor)
     tick.label2.set_weight('bold')
     tick.label2.set_size(10)
 
 #Write out figure
-plt.savefig(args.out[0],transparent=True,facecolor='black',bbox_inches='tight')
+plt.savefig(args.out[0],transparent=True,faceColor=faceColor,bbox_inches='tight')
 
 #Close all figures
 plt.close('all')

@@ -43,6 +43,7 @@ argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),hel
 argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise delay parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDelay is not.')
 argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise dispersion parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDisp is not.')
 argParse.add_argument('-weighted',action='store_const',const=1,help='Use weighted regression using John Lee style weights.')
+argParse.add_argument('-vol',action='store_true',help='Add in correction for blood volume')
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -243,6 +244,8 @@ wbTac = np.mean(petMasked,axis=0)
 
 #Setup the proper model function
 wbInit = [1,1]; wbBounds = np.array([[0.2,5.0],[0.2,5.0]]); wbScales = np.array([0.007,0.52])
+wbLabels = ['CBF','Lambda']; wbUnits = [6000.0/args.d,1.0/args.d]
+
 if args.noDelay == 1:
 
 	#Interpolate AIF
@@ -265,7 +268,12 @@ elif args.noDisp == 1:
 	else:
 		wbInit.append(0); wbBounds = np.vstack((wbBounds,[-2,2]));
 	wbScales = np.hstack((wbScales,[10]))
+
+	#Add labels
+	wbLabels += ['Delay']; wbUnits += [1.0]
+
 else:
+
 	#Model with delay and dispersion:
 	wbFunc = nagini.flowFour(aifFunc,interpTime,wbTac,midTime)
 
@@ -276,6 +284,14 @@ else:
 		wbInit.extend([0,0]); wbBounds = np.vstack((wbBounds,[-2,2],[-2,2]));
 	wbScales = np.hstack((wbScales,[10,5]))
 
+	#Add labels
+	wbLabels += ['Delay','Dispersion']; wbUnits += [1.0,1.0]
+
+#Add in volume bounds if necessary
+if args.vol is True:
+	wbInit.append(1); wbBounds = np.vstack((wbBounds,[1.0/5.0,5.0])); wbScales = np.hstack((wbScales,[0.01]))
+	wbLabels += ['V0']; wbUnits += [1.0/args.d]
+
 #Setup number of iterations for whole brain fitting
 if args.weighted is None:
 	weights = np.ones_like(wbTac)
@@ -284,10 +300,10 @@ else:
 	weights /= np.sum(weights*info[:,2])
 
 #Start out fitting with a very lenient tolerance
-wbStart = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.1,'maxls':100})
+wbStart = opt.minimize(wbFunc,wbInit,method='L-BFGS-B',args=(weights,False,args.vol),bounds=wbBounds,options={'eps':0.1,'maxls':100})
 
 #Use first fit to initilize with more reasonable tolerance
-wbOpt = opt.minimize(wbFunc,wbStart.x,method='L-BFGS-B',args=(weights),bounds=wbBounds,options={'eps':0.001,'maxls':100})
+wbOpt = opt.minimize(wbFunc,wbStart.x,method='L-BFGS-B',args=(weights,False,args.vol),bounds=wbBounds,options={'eps':0.001,'maxls':100})
 
 #Make sure we converged before moving on
 if wbOpt.success is False:
@@ -296,19 +312,17 @@ if wbOpt.success is False:
 
 #Get whole-brian fitted values
 if args.noDelay == 1:
-	wbFitted = wbFunc(wbOpt.x,weights,pred=True)
+	wbFitted = wbFunc(wbOpt.x,weights,pred=True,vol=args.vol)
 else:
-	wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,weights,pred=True)
+	wbFitted,wbPetMask,wbAifMask = wbFunc(wbOpt.x,weights,pred=True,vol=args.vol)
 
 #Remove optmization scales
 wbFit = wbOpt.x * wbScales
 
 #Create string for whole-brain parameter estimates
-labels = ['CBF','Lambda','Delay','Dispersion']
-scales = [6000.0/args.d,1/args.d,1.0,1.0]
 wbString = ''
 for pIdx in range(wbFit.shape[0]):
-	wbString += '%s = %f\n'%(labels[pIdx],wbFit[pIdx]*scales[pIdx])
+	wbString += '%s = %f\n'%(wbLabels[pIdx],wbFit[pIdx]*wbUnits[pIdx])
 
 #Write out whole-brain results
 try:
@@ -408,7 +422,7 @@ init = wbOpt.x; nParam = init.shape[0]
 #Set default voxelwise bounds
 bounds = np.stack((init[0:2]/3.0,init[0:2]*3.0)).T
 if args.fModel == 1:
-	for pIdx in range(2,nParam):
+	for pIdx in range(2,nParam-args.vol):
 		if init[pIdx] > 0:
 			bounds = np.vstack((bounds,[init[pIdx]/3.0,init[pIdx]*3.0]))
 		elif init[pIdx] < 0:
@@ -438,6 +452,11 @@ for bound in bCheck:
 		if init[bIdx] < bound[0] or init[bIdx] > bound[1]:
 			init[bIdx] = (bound[0]+bound[1]) / 2
 	bIdx += 1
+
+#Add volume to bounds
+if args.vol is True:
+	init = np.hstack((init,wbOpt.x[-1]))
+	bounds = np.vstack((bounds,[init[-1]/25.0,init[-1]*25.0]))
 
 #Setup for voxelwise-optimization
 nVox = petMasked.shape[0]; nParam = init.shape[0]
@@ -474,7 +493,7 @@ for voxIdx in tqdm(range(nVox)):
 
 	try:
 		#Run fit
-		voxOpt = opt.minimize(optFunc,init,method='L-BFGS-B',args=(weights),bounds=bounds,options={'eps':0.001,'maxls':100})
+		voxOpt = opt.minimize(optFunc,init,method='L-BFGS-B',args=(weights,False,args.vol),bounds=bounds,options={'eps':0.001,'maxls':100})
 
 		#Make sure we converged
 		if voxOpt.success is False:
@@ -489,10 +508,10 @@ for voxIdx in tqdm(range(nVox)):
 		if args.fModel == 1 and args.noDelay !=1:
 
 			#Save additional parameter estimates
-			fitParams[voxIdx,2:nParam] = voxOpt.x[2:nParam]*wbScales[2:nParam]
+			fitParams[voxIdx,2:(nParam-args.vol)] = voxOpt.x[2:(nParam-args.vol)]*wbScales[2:(nParam-args.vol)]
 
 			#Get fitted values
-			voxPred,voxMask,_ = optFunc(voxOpt.x,weights,pred=True)
+			voxPred,voxMask,_ = optFunc(voxOpt.x,weights,pred=True,vol=args.vol)
 
 			#Calculate residuals and mean of useable tac
 			voxResid = voxPred - voxTac[voxMask]
@@ -501,11 +520,15 @@ for voxIdx in tqdm(range(nVox)):
 		else:
 
 			#Get fitted values
-			voxPred = optFunc(voxOpt.x,weights,pred=True)
+			voxPred = optFunc(voxOpt.x,weights,pred=True,vol=args.vol)
 
 			#Calculate resisduals and mean of useable tac
 			voxResid = voxPred - voxTac[wbPetMask]
 			voxMean = np.mean(voxTac[wbPetMask])
+
+		#Add blood volume if necessary
+		if args.vol is True:
+			fitParams[voxIdx,(nParam-1)] = voxOpt.x[-1] * wbScales[-1] / args.d
 
 		#Calculate normalized root mean square deviation
 		fitParams[voxIdx,-1] = np.sqrt(np.sum(np.power(voxResid,2))/voxResid.shape[0]) / voxMean
@@ -523,12 +546,12 @@ if noC > 0:
 print('Writing out results...')
 
 #Set names for model images
-if args.fModel == 1:
-	paramNames = ['flow','lambda','delay','disp','nRmsd']
-else:
-	paramNames = ['flow','lambda','nRmsd']
+paramNames = wbLabels
+if args.fModel != 1:
+	paramNames.remove('Dispersion'); paramNames.remove('Delay')
+paramNames.append('nRmsd')
 
-#Do out images
+#Output images
 for iIdx in range(fitParams.shape[1]):
 	nagini.writeMaskedImage(fitParams[:,iIdx],brainData.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[iIdx]))
 

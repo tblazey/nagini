@@ -56,7 +56,7 @@ fdgAifLstPen: Version of fdgAifLst with penalty
 #What libraries do we need
 import numpy as np, nibabel as nib, sys, scipy.ndimage as img
 import scipy.interpolate as interp, subprocess as sub, scipy.special as spec
-import scipy.integrate as integ, scipy.optimize as opt
+import scipy.integrate as integ, scipy.optimize as opt, scipy.stats as stats
 
 #Only import pystan if we can
 try:
@@ -308,7 +308,7 @@ def flowTwo(aifTime,cAif,petTac,petTime,petMask):
 
 	"""
 
-	def flowPred(param,weights,pred=False):
+	def flowPred(param,weights,pred=False,vol=False):
 
 
 		"""
@@ -324,6 +324,8 @@ def flowTwo(aifTime,cAif,petTac,petTime,petMask):
 			a m x 1 array containing regression weights
 		pred: logical
 			Logical for what to return (see below)
+		vol: logical
+			Corrects for blood volume if true
 
 		Returns
 		-------
@@ -346,6 +348,10 @@ def flowTwo(aifTime,cAif,petTac,petTime,petMask):
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-(flow/lmbda)*aifTime))[0:aifTime.shape[0]]
 		flowConv *= (aifTime[1]-aifTime[0])
+
+		#Add in blood voume correction
+		if vol is True:
+			flowConv += param[2]*0.01*cAif
 
 		#Get interpolation function for model predictions
 		petPred = interp.interp1d(aifTime,flowConv[0:aifTime.shape[0]],kind="linear")(petTimeM)
@@ -383,7 +389,7 @@ def flowThreeDelay(aifFunc,aifTime,petTac,petTime,kernel=None):
 
 	"""
 
-	def flowPred(param,weights,pred=False):
+	def flowPred(param,weights,pred=False,vol=False):
 
 
 		"""
@@ -399,6 +405,8 @@ def flowThreeDelay(aifFunc,aifTime,petTac,petTime,kernel=None):
 			A m x 1 array containing regression weights
 		pred: logical
 			Logical indicating what to return (see below)
+		vol: logical
+			Corrects for blood volume if true
 
 		Returns
 		-------
@@ -434,6 +442,10 @@ def flowThreeDelay(aifFunc,aifTime,petTac,petTime,kernel=None):
 		#Calculate model prediction
 		flowConv = np.convolve(flow*cAifM,np.exp(-(flow/lmbda)*aifTimeM))[0:aifTimeM.shape[0]]
 		flowConv *= (aifTimeM[1]-aifTimeM[0])
+
+		#Correct for blood volume if necessary
+		if vol is True:
+			flowConv += cAifM*param[3]*.01
 
 		#Get interpolation function for model predictions
 		predInterp = interp.interp1d(aifTimeM,flowConv,kind="linear")
@@ -479,7 +491,7 @@ def flowFour(aifFunc,aifTime,petTac,petTime):
 
 	"""
 
-	def flowPred(param,weights,pred=False):
+	def flowPred(param,weights,pred=False,vol=True):
 
 		"""
 
@@ -494,6 +506,8 @@ def flowFour(aifFunc,aifTime,petTac,petTime):
 			A m x1 array containing regression weights
 		pred: logical
 			Logical indicating what to return (see below)
+		vol: logical
+			Corrects for blood volume if true
 
 		Returns
 		-------
@@ -533,6 +547,10 @@ def flowFour(aifFunc,aifTime,petTac,petTime):
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAifM,np.exp(-(flow/lmbda)*aifTimeM))[0:aifTimeM.shape[0]]
 		flowConv *= (aifTimeM[1]-aifTimeM[0])
+
+		#Correct for blood volume
+		if vol is True:
+			flowConv += cAifM*param[4]*0.01
 
 		#Get PET points where we have AIF data
 		petMask = np.logical_and(petTime>=aifTimeM[0],petTime<=aifTimeM[-1])
@@ -1322,7 +1340,10 @@ def writeArgs(args,out):
 	argString = ''
 	for arg,value in sorted(vars(args).items()):
 		if type(value) is list:
-			value = value[0]
+			if len(value) > 0:
+				value = ','.join(map(str,value))
+			else:
+				value = value[0]
 		argString += '%s: %s\n'%(arg,value)
 
 	#Write out arguments
@@ -2967,3 +2988,300 @@ def fdgFourCalc(coefs,blood,dT,lc,vb=None,flow=None):
 
 	#Return parameter estimates
 	return fdgParams
+
+
+#Create function to do combined fiting with delay and disperison 
+def sharedFlowDisp(hoAifTime,hoAifFunc,hoTacTime,hoTac,hoWeights,obAifTime,obAifFunc,obTacTime,obTac,obWeights):
+
+	"""
+
+	Returns model prediction function for shared butanol and water data. With terms for delay and dispersion
+
+	Parameters
+	----------
+
+	hoAifTime: list
+		A m length list containing arrays with sampling times for water AIFs
+	hoAifFunc: list
+	   	A m length list with fucntions that return interpolated points for water AIF and its derivative
+	hoTacTime: list
+		A m length list containing arrays with water PET sampling times
+	hoTac: list
+		A m length list containing PET arrays.
+	hoWeights: list
+		A m length list containing weights for regression
+	obAifTime: list
+		A n length list containing arrays with sampling times for butanol AIFs
+	obAifFunc: list
+	   	A n length list with functions that return interpolated points for butanol AIF and its derivative
+	obTacTime: list
+		A n length list containing arrays with butanol PET sampling times
+	obTac: list
+		A n length list containing PET arrays.
+	obWeights: list
+		A m length list containing weights for regression
+
+	Returns
+    	-------
+
+	sharedPredDisp: fucntion
+		A function that returns predictions or cost given shared water and butanol data
+
+	"""
+
+	def sharedPredDisp(param,pred=False,vol=False):
+
+		"""
+
+		Computes model predictions or cost of shared water and butanol model given parameters
+
+		Parameters
+		----------
+
+		param: array
+			Parameter list. If loglike is false then it must contain PSw,flow,obL,hoL, and delay and dispersion for each run.
+		pred: logical
+		   	If true then function returns model predictions
+		vol: logical
+			If true then correct for tracer volumes
+
+		Returns
+	    	-------
+
+		sse|pred: float|list,list
+			Returns either sum of squares error (sse) or model predictions (list,list)
+
+		"""
+
+		#Rename variables
+		psW = param[0] * 0.014
+		flow = param[1] * 0.0067
+		obL = param[2] * 0.44
+		hoL = param[3] * 0.55
+
+		#Are we correcting for blood volume?
+		if vol is True:
+			aV = param[4]*0.01
+			nV = param[5]*0.01
+			pIdx = 6
+		else:
+			pIdx = 4
+
+		#Convert permeability to extraction
+		E = 1 - np.exp(psW/-flow)
+
+		#Create emtpy lists for predictiosn
+		hoPred = []; obPred = []
+
+		#Get number of scans
+		nHo = len(hoAifTime)
+		nOb = len(obAifTime)
+		
+		#Loop through water scans
+		for i in range(nHo):
+
+			#Run aif interpolation with delay correction
+			hoAif,hoAifD = hoAifFunc[i](hoAifTime[i]+param[pIdx]*13.6,deriv=True)
+
+			#Add in dispersion correction
+			hoAif += hoAifD*param[pIdx+1]*7.8
+
+			#Get model prediction
+			hoConv = np.convolve(flow*E*hoAif,np.exp(-(flow*E/hoL)*hoAifTime[i]))[0:hoAifTime[i].shape[0]]*(hoAifTime[i][1]-hoAifTime[i][0])
+
+			#Add in blood volume if necessary
+			if vol is True:
+				hoConv += hoAif*nV
+
+			#Get model prediction at pet times
+			hoPred.append(interp.interp1d(hoAifTime[i],hoConv,kind="linear")(hoTacTime[i]))
+
+			#Update parameter index
+			pIdx += 2
+
+		#Loop through butanol scans
+		for i in range(nOb):
+
+			#Run aif interpolation with delay correction
+			obAif,obAifD = obAifFunc[i](obAifTime[i]+param[pIdx]*13.6,deriv=True)
+
+			#Add in dispersion correction
+			obAif += obAifD*param[pIdx+1]*7.8
+
+			#Get model prediction
+			obConv = np.convolve(flow*obAif,np.exp(-(flow/obL)*obAifTime[i]))[0:obAifTime[i].shape[0]]*(obAifTime[i][1]-obAifTime[i][0])
+
+			#Add in blood volume if necessary
+			if vol is True:
+				obConv += obAif*aV
+		
+			#Interpolate model predictions at pet times
+			obPred.append(interp.interp1d(obAifTime[i],obConv,kind="linear")(obTacTime[i]))	
+
+			#Update parameter index
+			pIdx +=2	
+
+		if pred is True:
+
+			#Return model predictions
+			return hoPred,obPred
+
+		else:
+
+			#Compute total sum of squares
+			sse = 0
+			for i in range(nHo):
+				sse += np.sum(hoWeights[i]*np.power(hoTac[i] - hoPred[i],2))
+			for i in range(nOb):
+				sse += np.sum(obWeights[i]*np.power(obTac[i] - obPred[i],2))
+				
+			#Return combined sum of squares error
+			return sse
+
+	#Return function
+	return sharedPredDisp
+
+#Create function to do combined fiting 
+def sharedFlow(hoAifTime,hoAif,hoTacTime,hoTac,hoWeights,obAifTime,obAif,obTacTime,obTac,obWeights):
+
+	"""
+
+	Returns model prediction function for shared butanol and water data. 
+
+	Parameters
+	----------
+
+	hoAifTime: list
+		A m length list containing arrays with sampling times for water AIFs
+	hoAif: list
+	   	A m length list with AIF samples at hoAifTime
+	hoTacTime: list
+		A m length list containing arrays with water PET sampling times
+	hoTac: list
+		A m length list containing 2D PET image arrays.
+	hoWeights: list
+		A m length list containing weights for regression
+	obAifTime: list
+		A n length list containing arrays with sampling times for butanol AIFs
+	obAif: list
+	   	A n length list with AIf samples at obAifTime
+	obTacTime: list
+		A n length list containing arrays with butanol PET sampling times
+	obTac: list
+		A n length list containing PET arrays.
+	obWeights: list
+		A n length list containg weights for regression.
+
+	Returns
+    	-------
+
+	sharedPred: fucntion
+		A function that returns predictions or cost given shared water and butanol data
+
+	"""
+
+	def sharedPred(param,voxIdx,pred=False,vol=False,pen=None,prior=None):
+
+		"""
+
+		Computes model predictions or cost of shared water and butanol model given parameters
+
+		Parameters
+		----------
+
+		param: array
+			Array of parameters. 4x1 if vol is False, 6x1 if vol is true.
+		voxIdx: int
+			Integer giving voxel index of 2D images in hoTac and obTac
+		pred: logical
+		   	If true then function returns model predictions	
+		vol: logical
+			Correction for blood volume
+		pen: real
+			Penalty for optimization.
+		prior: array
+			Array of priors for penalty . Same size as param 
+		
+
+		Returns
+	    	-------
+
+		sse|pred: float|list,list
+			Returns either sum of squares error (sse) or model predictions (list,list)
+
+		"""
+
+		#Rename variables
+		psW = param[0] * 0.014
+		flow = param[1] * 0.0067
+		obL = param[2] * 0.44
+		hoL = param[3] * 0.55
+
+		#Are we correcting for blood volume?
+		if vol is True:
+			aV = param[4]*0.01
+			nV = param[5]*0.01
+
+		#Convert permeability to extraction
+		E = 1 - np.exp(psW/-flow)
+
+		#Create emtpy lists for predictiosn
+		hoPred = []; obPred = []
+
+		#Get number of scans
+		nHo = len(hoAifTime)
+		nOb = len(obAifTime)
+		
+		#Loop through water scans
+		for i in range(nHo):
+
+			#Get model prediction
+			hoConv = np.convolve(flow*E*hoAif[i],np.exp(-(flow*E/hoL)*hoAifTime[i]))[0:hoAifTime[i].shape[0]]*(hoAifTime[i][1]-hoAifTime[i][0])
+
+			#Correct for blood volume if necessary
+			if vol is True:
+				hoConv += hoAif[i]*nV
+
+			#Get model prediction at pet times
+			hoPred.append(interp.interp1d(hoAifTime[i],hoConv,kind="linear")(hoTacTime[i]))
+
+		#Loop through butanol scans
+		for i in range(nOb):
+
+			#Get model prediction
+			obConv = np.convolve(flow*obAif[i],np.exp(-(flow/obL)*obAifTime[i]))[0:obAifTime[i].shape[0]]*(obAifTime[i][1]-obAifTime[i][0])
+
+			#Correct for blood volume if necessary
+			if vol is True:
+				obConv += obAif[i]*aV
+		
+			#Interpolate model predictions at pet times
+			obPred.append(interp.interp1d(obAifTime[i],obConv,kind="linear")(obTacTime[i]))		
+
+		if pred is True:
+
+			#Return model predictions
+			return hoPred,obPred
+	
+		else:
+
+			#Compute total sum of squares
+			sse = 0
+			for i in range(nHo):
+				sse += np.sum(hoWeights*np.power(hoTac[i][voxIdx,:] - hoPred[i],2))
+			for i in range(nOb):
+				sse += np.sum(obWeights*np.power(obTac[i][voxIdx,:] - obPred[i],2))
+	
+			if pen is None or prior is None:
+				
+				#Return combined sum of squares error
+				return sse
+
+			else:
+
+				#Return sum of squares with an penalty
+				return sse + pen*sse*np.sum(np.power(np.log(prior/param),2))
+
+	#Return function
+	return sharedPred
+
