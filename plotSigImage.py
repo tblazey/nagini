@@ -66,13 +66,13 @@ else:
 if nImgDim == 4:
 
 	#Check to see if we can actually plot that time point
-	if args.f < 0 or args.f >= pimg.shape[3]:
+	if args.f < 0 or args.f >= pImg.shape[3]:
 		print 'Error: Requested frame %i is out of range for image with %i frames. Remember zero based indexing...'%(args.f,pImg.shape[3])
 		sys.exit() 
 		
 	#If we can go ahead and get it
 	pData = pData[:,:,:,args.f]
-	nData = nData[:,:,:,arg.f]
+	nData = nData[:,:,:,args.f]
 	
 elif args.f != 0:
 	print 'Error: Cannot plot selected frame %i because image is only 3D. Remember zero based indexing...'%(args.f)

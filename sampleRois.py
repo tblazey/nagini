@@ -11,6 +11,7 @@ argParse.add_argument('img',help='Image to put into ROIs',nargs=1)
 argParse.add_argument('roi',help='Image containing ROIs',nargs=1)
 argParse.add_argument('out',help='Root for output file',nargs=1)
 argParse.add_argument('-nii',help='Output ROI as a ROIx1x1xTime Nifti file. Default is text file',action='store_const',const=1)
+argParse.add_argument('-stat',help='Statistic to compute.',choices=['mean','min','max'],default='mean')
 args = argParse.parse_args()
 
 #Load needed libraries
@@ -37,7 +38,7 @@ else:
 roiData = roiData.flatten()
 
 #Sample into ROIs
-avgData = nagini.roiAvg(imgData,roiData)
+avgData = nagini.roiAvg(imgData,roiData,stat=args.stat)
 
 #Save roi averages in the format user wants.
 if args.nii == 1:

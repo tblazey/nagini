@@ -1,0 +1,173 @@
+functions {
+
+	// Elementwise exponent
+	vector eVec(vector x,int n){
+		vector[n] pX;
+		for (i in 1:n)
+			pX[i] = exp(x[i]);
+		return(pX);
+	}
+
+	
+	// Linear interpolation
+	vector linInterp(vector x,vector y, vector xPrime, int nX, int nPrime){
+		vector[nPrime] yPrime;
+		for (i in 1:nPrime){
+			int k; int j;
+			k = 0; j = 1;
+			while (k==0){
+				//Check to see if current point in loop is boundry point
+				if( xPrime[i]-x[j]<=0 || j==nX ){
+					real yZero; real yOne;
+					real xZero; real xOne;
+					real mu;
+
+					//Account for extrapolation if needed
+					if ( j == 1 ){
+						yZero = y[j]; yOne = y[j+1];
+						xZero = x[j]; xOne = x[j+1];
+					}
+					else{
+						yZero = y[j-1]; yOne = y[j];
+						xZero = x[j-1]; xOne = x[j];
+					}
+
+					//Interpolate point
+					mu = (xPrime[i]-xZero)/(xOne-xZero);
+					yPrime[i] = yZero*(1-mu) + yOne*mu;
+
+					//Break
+					k = 1;
+				}
+				j = j + 1;
+			}
+		}
+		return(yPrime);
+	}
+
+	// Function to perform a nice little convolution
+	vector convolve(vector x, vector y, int n, real step){
+
+		// Declare variables
+		vector[n] c;
+		real cSum;
+
+		#Do some convolving
+		for (i in 1:n) {
+			cSum = 0;
+			for (j in 1:i) {
+				cSum = cSum + (x[j]*y[i-j+1]);
+			}
+			c[i] = cSum * step;
+		}
+		return(c);
+	}
+
+}
+
+data {
+	int nHo;
+	int nHoTac;
+	int nHoAif;
+	int hoAifLen[nHo];
+	int hoTacLen[nHo];
+	vector[nHo] hoAifStep;
+	vector[nHoAif] hoAifTime;
+	vector[nHoAif] hoAif;
+	vector[nHoTac] hoTacTime;
+	vector[nHoTac] hoTac;
+	int nOb;
+	int nObTac;
+	int nObAif;
+	int obAifLen[nOb];
+	int obTacLen[nOb];
+	vector[nOb] obAifStep;
+	vector[nObAif] obAifTime;
+	vector[nObAif] obAif;
+	vector[nObTac] obTacTime;
+	vector[nObTac] obTac;
+}
+
+parameters {
+	real<lower=0,upper=0.05> f;
+	real<lower=0,upper=0.07> PSw;
+	real<lower=0,upper=1.5> hoL;
+	real<lower=0,upper=1.5> obL;
+	real<lower=0> sigma;
+}
+
+transformed parameters {
+	real<lower=0,upper=1> E;
+	E = 1.0 - exp(PSw/-f);
+}
+
+model {
+	//Declare position variables
+	int hoAifPos;
+	int hoTacPos;
+	int obAifPos;
+	int obTacPos;
+
+	//Priors
+	f ~ cauchy(45/6000.0*1.05,8/6000.0*1.05);
+	PSw ~ cauchy(120/6000.0*1.05,8/6000.0*1.05);
+	obL ~ cauchy(0.77*1.05,0.25*1.05);
+	hoL ~ cauchy(0.9*1.05,0.25*1.05);
+	sigma ~ cauchy(300,100);
+
+	
+	//Loop through each water scan
+	hoAifPos = 1; hoTacPos = 1;
+	for (i in 1:nHo){
+
+		//Create emtpy arrays for predictions
+		vector[hoAifLen[i]] hoMu;
+		vector[hoAifLen[i]] aifTime;
+		vector[hoTacLen[i]] hoPetMu;
+
+		//Extract aif time variable (we need it twice)
+		aifTime = segment(hoAifTime,hoAifPos,hoAifLen[i]);
+
+		//Compute model predictions at AIF sample times
+		hoMu = convolve(f*E*segment(hoAif,hoAifPos,hoAifLen[i]),eVec(-f*E/hoL*aifTime,hoAifLen[i]),hoAifLen[i],hoAifStep[i]);
+
+		//Compute predictions at PET sample times
+		hoPetMu = linInterp(aifTime,hoMu,segment(hoTacTime,hoTacPos,hoTacLen[i]),hoAifLen[i],hoTacLen[i]);
+
+		//Update likelihood
+		segment(hoTac,hoTacPos,hoTacLen[i]) ~ normal(hoPetMu,sigma);
+
+		//Update positions
+		hoAifPos = hoAifPos + hoAifLen[i]; hoTacPos = hoTacPos + hoTacLen[i];
+
+	}
+
+	//Loop through each butanol scan
+	obAifPos = 1; obTacPos = 1;
+	for (i in 1:nOb){
+
+		//Create emtpy arrays for predictions
+		vector[obAifLen[i]] obMu;
+		vector[obAifLen[i]] aifTime;
+		vector[obTacLen[i]] obPetMu;
+
+		//Extract aif time variable (we need it twice)
+		aifTime = segment(obAifTime,obAifPos,obAifLen[i]);
+
+		//Compute model predictions at AIF sample times
+		obMu = convolve(f*segment(obAif,obAifPos,obAifLen[i]),eVec(-f/obL*aifTime,obAifLen[i]),obAifLen[i],obAifStep[i]);
+
+		//Compute predictions at PET sample times
+		obPetMu = linInterp(aifTime,obMu,segment(obTacTime,obTacPos,obTacLen[i]),obAifLen[i],obTacLen[i]);
+
+		//Update likelihood
+		segment(obTac,obTacPos,obTacLen[i]) ~ normal(obPetMu,sigma);
+
+		//Update positions
+		obAifPos = obAifPos + obAifLen[i]; obTacPos = obTacPos + obTacLen[i];
+
+	}
+
+}
+
+

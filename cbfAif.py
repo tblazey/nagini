@@ -32,18 +32,20 @@ argParse.add_argument('-wbOnly',action='store_const',const=1,help='Only perform 
 argParse.add_argument('-dcv',action='store_const',const=1,help='AIF is from a DCV file, not a CRV file. Using -noDisp or -noDelay is recommended.')
 argParse.add_argument('-kernel',nargs=1,help='Deconvolution kernel for AIF fit. Has no effect with -spline. Using along with -noDisp is strongly recommended.')
 argParse.add_argument('-spline',help='Use a restricted cubic spline to fit AIF. Does not use deconvolution kernel.',action='store_true')
-argParse.add_argument('-nKnots',nargs=1,help='Number of knots for restricted cubic spline. Defalut is number of data points.',type=int)
+argParse.add_argument('-nKnots',nargs=1,help='Number of knots for restricted cubic spline. Default is number of data points.',type=int)
 argParse.add_argument('-noDisp',action='store_const',const=1,help='Do not include AIF dispersion term in model.')
 argParse.add_argument('-noDelay',action='store_const',const=1,help='Do not include AIF delay term in model. Implies -noDisp.')
 argParse.add_argument('-fModel',action='store_const',const=1,help='Does delay and/or dispersion estimate at each voxel.')
 argParse.add_argument('-extrap',action='store_const',const=1,help='Allow input function to be extrapolated.')
 argParse.add_argument('-d',help='Density of brain tissue in g/mL. Default is 1.05',default=1.05,metavar='density',type=float)
-argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise flow parameter. Default is 10 times whole-brain estimate')
+argParse.add_argument('-fBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise flow parameter. Default is 3 times whole-brain estimate')
 argParse.add_argument('-lBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise lambda parameter. Default is 0 to 2.')
-argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise delay parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDelay is not.')
-argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise dispersion parameter. Default is 10 times whole-brain estimate. Only relevant if -fModel is set and -noDisp is not.')
+argParse.add_argument('-dBound',nargs=2,type=float,metavar=('lower', 'upper'),help='Bounds for voxelwise delay parameter. Default is 3 times whole-brain estimate. Only relevant if -fModel is set and -noDelay is not.')
+argParse.add_argument('-tBound',nargs=2,type=float,metavar=('lower','upper'),help='Bounds for voxelwise dispersion parameter. Default is 3 times whole-brain estimate. Only relevant if -fModel is set and -noDisp is not.')
 argParse.add_argument('-weighted',action='store_const',const=1,help='Use weighted regression using John Lee style weights.')
 argParse.add_argument('-vol',action='store_true',help='Add in correction for blood volume')
+argParse.add_argument('-ps',help='Supply CBF image. If given, program produces permeablity surface area product instead of CBF',nargs=1,type=str,metavar='CBF Image') 
+argParse.add_argument('-poly',help='Use polynomial regression approximation instead of standard optmization. Ignores -fModel, -vol, -weighted and bound parameters in voxelwise optimization.',action='store_const',const=True)
 args = argParse.parse_args()
 
 #Make sure sure user set bounds correctly
@@ -78,29 +80,16 @@ info = nagini.loadInfo(args.info[0])
 
 #Load image headers
 pet = nagini.loadHeader(args.pet[0])
+if args.ps is not None:
+	cbf = nagini.loadHeader(args.ps[0])
+	if np.prod(pet.shape[0:3]) != np.prod(cbf.shape[0:3]):
+		print 'ERROR: Data dimensions do not match. Please check...'
+		sys.exit()
 
 #Check to make sure dimensions match
 if pet.shape[3] != info.shape[0]:
 	print 'ERROR: Data dimensions do not match. Please check...'
 	sys.exit()
-
-#Brain mask logic
-if args.brain is not None:
-
-	#Load brain mask header
-	brain = nagini.loadHeader(args.brain[0])
-
-	#Make sure its dimensions match
-	if pet.shape[0:3] != brain.shape[0:3]:
-		print 'ERROR: Mask dimensiosn do not match data. Please check...'
-		sys.exit()
-
-	#Load in  mask data
-	brainData = brain.get_data()
-
-else:
-	#Make a fake mask
-	brainData = np.ones(pet.shape[0:3])
 
 #Load in the kernel if necessary
 if args.kernel is not None:
@@ -113,9 +102,36 @@ else:
 
 #Get the image data
 petData = pet.get_data()
+if args.ps is not None:
+	cbfData = cbf.get_data()
+
+#Brain mask logic
+if args.brain is not None:
+
+	#Load brain mask header
+	brain = nagini.loadHeader(args.brain[0])
+
+	#Make sure its dimensions match
+	if np.prod(pet.shape[0:3]) != np.prod(brain.shape[0:3]):
+		print 'ERROR: Mask dimensiosn do not match data. Please check...'
+		sys.exit()
+
+	#Load in  mask data
+	brainData = brain.get_data()
+
+else:
+	#Make a fake mask
+	brainData = np.ones(pet.shape[0:3])
+
+#Make flat mask
+if args.ps is not None:
+	flatMask = np.logical_and(brainData.flatten()>0,cbfData.flatten()>0)
+	cbfMasked = cbfData.flatten()[flatMask]
+else:
+	flatMask = brainData.flatten()>0
 
 #Flatten the PET images and then mask
-petMasked = nagini.reshape4d(petData)[brainData.flatten()>0,:]
+petMasked = nagini.reshape4d(petData)[flatMask,:]
 
 #Get pet start and end times. Assume start of first recorded frame is injection (has an offset which is subtracted out)
 startTime = info[:,0] - info[0,0]
@@ -243,8 +259,15 @@ print ('Beginning fitting procedure...')
 wbTac = np.mean(petMasked,axis=0)
 
 #Setup the proper model function
-wbInit = [1,1]; wbBounds = np.array([[0.2,5.0],[0.2,5.0]]); wbScales = np.array([0.007,0.52])
-wbLabels = ['CBF','Lambda']; wbUnits = [6000.0/args.d,1.0/args.d]
+wbInit = [1,1]; wbBounds = np.array([[0.2,5.0],[0.2,5.0]]); wbUnits = [6000.0/args.d,1.0/args.d]
+if args.ps is not None:
+	wbScales = np.array([0.014,0.52])
+	wbLabels = ['PSw','Lambda']; 
+	wbCbf = np.mean(cbfMasked) / 6000.0 * args.d
+else:
+	wbScales = np.array([0.007,0.52])
+	wbLabels = ['CBF','Lambda']; 
+	wbCbf = None
 
 if args.noDelay == 1:
 
@@ -255,12 +278,12 @@ if args.noDelay == 1:
 	wbPetMask = np.logical_and(midTime>=interpTime[0],midTime<=interpTime[-1])
 
 	#Model with just flow and lambda
-	wbFunc = nagini.flowTwo(interpTime,interpAif,wbTac,midTime,wbPetMask)
+	wbFunc = nagini.flowTwo(interpTime,interpAif,wbTac,midTime,wbPetMask,cbf=wbCbf)
 
 elif args.noDisp == 1:
 
 	#Model with just delay
-	wbFunc = nagini.flowThreeDelay(aifFunc,interpTime,wbTac,midTime)
+	wbFunc = nagini.flowThreeDelay(aifFunc,interpTime,wbTac,midTime,cbf=wbCbf)
 
 	#Add in starting point, bounds, and scale
 	if args.kernel is None:
@@ -275,7 +298,7 @@ elif args.noDisp == 1:
 else:
 
 	#Model with delay and dispersion:
-	wbFunc = nagini.flowFour(aifFunc,interpTime,wbTac,midTime)
+	wbFunc = nagini.flowFour(aifFunc,interpTime,wbTac,midTime,cbf=wbCbf)
 
 	#Add in starting points, bounds, and scales
 	if args.kernel is None:
@@ -323,6 +346,11 @@ wbFit = wbOpt.x * wbScales
 wbString = ''
 for pIdx in range(wbFit.shape[0]):
 	wbString += '%s = %f\n'%(wbLabels[pIdx],wbFit[pIdx]*wbUnits[pIdx])
+
+#Add extraction to whole-brain estimates if necessary
+if args.ps is not None:
+	wbEx = 1.0 - np.exp(wbFit[0]/-wbCbf)
+	wbString += 'Extraction = %f\n'%(wbEx)
 
 #Write out whole-brain results
 try:
@@ -416,144 +444,200 @@ if args.wbOnly == 1:
 	nagini.writeArgs(args,args.out[0])
 	sys.exit()
 
-#Use whole-brain values as initilization
-init = wbOpt.x; nParam = init.shape[0]
-
-#Set default voxelwise bounds
-bounds = np.stack((init[0:2]/3.0,init[0:2]*3.0)).T
-if args.fModel == 1:
-	for pIdx in range(2,nParam-args.vol):
-		if init[pIdx] > 0:
-			bounds = np.vstack((bounds,[init[pIdx]/3.0,init[pIdx]*3.0]))
-		elif init[pIdx] < 0:
-			bounds = np.vstack((bounds,[init[pIdx]*3.0,init[pIdx]/3.0]))
-		else:
-			bounds = np.vstack((bounds,wbBounds[pIdx]))
-
-#Create list of user bounds to check and set initlization
-if args.noDelay == 1 or args.fModel != 1:
-	bCheck = [args.fBound,args.lBound]
-	init = init[0:2]
-elif args.noDisp == 1:
-	bCheck = [args.fBound,args.lBound,args.dBound]
-	init = init[0:3]
-else:
-	bCheck = [args.fBound,args.lBound,args.dBound,args.tBound]
-	init = init[0:4]
-
-#Check user bounds
-bIdx = 0
-for bound in bCheck:
-	#If user wants different bounds, use them.
-	if bound is not None:
-		bounds[bIdx,0] = bound[0]
-		bounds[bIdx,1] = bound[1]
-		#Use midpoint between bounds as initial value if whole brain estimate is not in bounds
-		if init[bIdx] < bound[0] or init[bIdx] > bound[1]:
-			init[bIdx] = (bound[0]+bound[1]) / 2
-	bIdx += 1
-
-#Add volume to bounds
-if args.vol is True:
-	init = np.hstack((init,wbOpt.x[-1]))
-	bounds = np.vstack((bounds,[init[-1]/25.0,init[-1]*25.0]))
-
-#Setup for voxelwise-optimization
-nVox = petMasked.shape[0]; nParam = init.shape[0]
-fitParams = np.zeros((nVox,nParam+1))
-
 #Get corrected input function if we need to
 if args.fModel != 1 and args.noDelay !=1:
 
 	#Get shifted aif
-	if args.noDisp != 1:
+	if args.noDisp != 1 or args.poly is True:
 		voxAif,voxAifD = aifFunc(interpTime+wbFit[2],deriv=True); voxAif += voxAifD*wbFit[3]
 	else:
 		voxAif = aifFunc(interpTime+wbFit[2])
 elif args.noDelay == 1:
 	voxAif = interpAif
 
-#Loop through every voxel
-noC = 0
-for voxIdx in tqdm(range(nVox)):
+#Switch for optmization or polynomial regression
+if args.poly is True:
 
-	#Get voxel tac
-	voxTac = petMasked[voxIdx,:]
+	#Create function for getting model predictions
+	modelFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],wbTac,midTime,wbPetMask)
 
-	#Get proper model function.
-	if args.fModel == 1 and args.noDelay !=1:
+	#Get input for polynomial regression
+	cbfPred = np.arange(10,110,10); nPred = cbfPred.shape[0]; petPred = np.zeros(nPred)
+	
+	#Loop through CBF predictions
+	for pIdx in range(nPred):
 
-		if args.noDisp == 1:
-			optFunc = nagini.flowThreeDelay(aifFunc,interpTime,voxTac,midTime)
-		else:
-			optFunc = nagini.flowFour(aifFunc,interpTime,voxTac,midTime)
+		#Calculate PET model given flow, lmbda, and AIF
+		modelPred = modelFunc([cbfPred[pIdx]/6000.0*args.d/wbScales[0],wbOpt.x[1]],weights,True)
+
+		#Integrate it over specefied range 
+		petPred[pIdx] = np.trapz(modelPred,midTime[wbPetMask])
+
+	#Make polynomial basis for regressi
+	basis = np.vstack((petPred,petPred**2.0)).T
+	coef,_,_,_ = np.linalg.lstsq(basis,cbfPred)
+
+	#Integrate all voxels
+	voxInt = np.trapz(petMasked[:,wbPetMask],midTime[wbPetMask],axis=1)
+
+	#Compue CBF for all voxels
+	voxBasis = np.vstack((voxInt,voxInt**2.0)).T
+	voxCbf = voxBasis.dot(coef)
+
+else:
+
+	#Use whole-brain values as initilization
+	init = wbOpt.x; nParam = init.shape[0]
+
+	#Set default voxelwise bounds
+	bounds = np.stack((init[0:2]/3.0,init[0:2]*3.0)).T
+
+	#Make default bounds for delay/dispersion if necessary
+	if args.fModel == 1:
+		for pIdx in range(2,nParam-args.vol):
+			if init[pIdx] > 0:
+				bounds = np.vstack((bounds,[init[pIdx]/3.0,init[pIdx]*3.0]))
+			elif init[pIdx] < 0:
+				bounds = np.vstack((bounds,[init[pIdx]*3.0,init[pIdx]/3.0]))
+			else:
+				bounds = np.vstack((bounds,wbBounds[pIdx]))
+
+	#Create list of user bounds to check and set initlization
+	if args.noDelay == 1 or args.fModel != 1:
+		bCheck = [args.fBound,args.lBound]
+		init = init[0:2]
+	elif args.noDisp == 1:
+		bCheck = [args.fBound,args.lBound,args.dBound]
+		init = init[0:3]
 	else:
-		optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],voxTac,midTime,wbPetMask)
+		bCheck = [args.fBound,args.lBound,args.dBound,args.tBound]
+		init = init[0:4]
 
+	#Check user bounds
+	bIdx = 0
+	for bound in bCheck:
+		#If user wants different bounds, use them.
+		if bound is not None:
+			bounds[bIdx,0] = bound[0]
+			bounds[bIdx,1] = bound[1]
+			#Use midpoint between bounds as initial value if whole brain estimate is not in bounds
+			if init[bIdx] < bound[0] or init[bIdx] > bound[1]:
+				init[bIdx] = (bound[0]+bound[1]) / 2
+		bIdx += 1
 
-	try:
-		#Run fit
-		voxOpt = opt.minimize(optFunc,init,method='L-BFGS-B',args=(weights,False,args.vol),bounds=bounds,options={'eps':0.001,'maxls':100})
+	#Add volume to bounds
+	if args.vol is True:
+		init = np.hstack((init,wbOpt.x[-1]))
+		bounds = np.vstack((bounds,[init[-1]/25.0,init[-1]*25.0]))
 
-		#Make sure we converged
-		if voxOpt.success is False:
-			noC += 1
-			continue
+	#Setup for voxelwise-optimization
+	nVox = petMasked.shape[0]; nParam = init.shape[0]
+	fitParams = np.zeros((nVox,nParam+1))
 
-		#Save common estimates
-		fitParams[voxIdx,0] = voxOpt.x[0] * 6000.0 / args.d * wbScales[0]
-		fitParams[voxIdx,1] = voxOpt.x[1] / args.d * wbScales[1]
+	#Loop through every voxel
+	noC = 0
+	for voxIdx in tqdm(range(nVox)):
 
-		#Logic for model specific results
+		#Get voxel tac
+		voxTac = petMasked[voxIdx,:]
+
+		#Get voxel CBF if necessary
+		if args.ps is not None:
+			voxCbf = cbfMasked[voxIdx]/6000.0*args.d
+		else:
+			voxCbf = None
+
+		#Get proper model function.
 		if args.fModel == 1 and args.noDelay !=1:
 
-			#Save additional parameter estimates
-			fitParams[voxIdx,2:(nParam-args.vol)] = voxOpt.x[2:(nParam-args.vol)]*wbScales[2:(nParam-args.vol)]
-
-			#Get fitted values
-			voxPred,voxMask,_ = optFunc(voxOpt.x,weights,pred=True,vol=args.vol)
-
-			#Calculate residuals and mean of useable tac
-			voxResid = voxPred - voxTac[voxMask]
-			voxMean = np.mean(voxTac[voxMask])
-
+			if args.noDisp == 1:
+				optFunc = nagini.flowThreeDelay(aifFunc,interpTime,voxTac,midTime,cbf=voxCbf)
+			else:
+				optFunc = nagini.flowFour(aifFunc,interpTime,voxTac,midTime,cbf=voxCbf)
 		else:
+			optFunc = nagini.flowTwo(interpTime[wbAifMask],voxAif[wbAifMask],voxTac,midTime,wbPetMask,cbf=voxCbf)
 
-			#Get fitted values
-			voxPred = optFunc(voxOpt.x,weights,pred=True,vol=args.vol)
 
-			#Calculate resisduals and mean of useable tac
-			voxResid = voxPred - voxTac[wbPetMask]
-			voxMean = np.mean(voxTac[wbPetMask])
+		try:
+			#Run fit
+			voxOpt = opt.minimize(optFunc,init,method='L-BFGS-B',args=(weights,False,args.vol),bounds=bounds,options={'eps':0.001,'maxls':100,'ftol':1E3})
 
-		#Add blood volume if necessary
-		if args.vol is True:
-			fitParams[voxIdx,(nParam-1)] = voxOpt.x[-1] * wbScales[-1] / args.d
+			#Make sure we converged
+			if voxOpt.success is False:
+				noC += 1
+				continue
 
-		#Calculate normalized root mean square deviation
-		fitParams[voxIdx,-1] = np.sqrt(np.sum(np.power(voxResid,2))/voxResid.shape[0]) / voxMean
+			#Save common estimates
+			fitParams[voxIdx,0] = voxOpt.x[0] * 6000.0 / args.d * wbScales[0]
+			fitParams[voxIdx,1] = voxOpt.x[1] / args.d * wbScales[1]
 
-	except(RuntimeError):
-		noC += 1
+			#Logic for model specific results
+			if args.fModel == 1 and args.noDelay !=1:
 
-#Warn user about lack of convergence
-if noC > 0:
-	print('Warning: %i of %i voxels did not converge.'%(noC,nVox))
+				#Save additional parameter estimates
+				fitParams[voxIdx,2:(nParam-args.vol)] = voxOpt.x[2:(nParam-args.vol)]*wbScales[2:(nParam-args.vol)]
 
+				#Get fitted values
+				voxPred,voxMask,_ = optFunc(voxOpt.x,weights,pred=True,vol=args.vol)
+
+				#Calculate residuals and mean of useable tac
+				voxResid = voxPred - voxTac[voxMask]
+				voxMean = np.mean(voxTac[voxMask])
+
+			else:
+
+				#Get fitted values
+				voxPred = optFunc(voxOpt.x,weights,pred=True,vol=args.vol)
+
+				#Calculate resisduals and mean of useable tac
+				voxResid = voxPred - voxTac[wbPetMask]
+				voxMean = np.mean(voxTac[wbPetMask])
+
+			#Add blood volume if necessary
+			if args.vol is True:
+				fitParams[voxIdx,(nParam-1)] = voxOpt.x[-1] * wbScales[-1] / args.d
+
+			#Calculate normalized root mean square deviation
+			fitParams[voxIdx,-1] = np.sqrt(np.sum(np.power(voxResid,2))/voxResid.shape[0]) / voxMean
+
+		except(RuntimeError):
+			noC += 1
+
+	#Warn user about lack of convergence
+	if noC > 0:
+		print('Warning: %i of %i voxels did not converge.'%(noC,nVox))
+sys.exit()
 #############
 ###Output!###
 #############
 print('Writing out results...')
 
 #Set names for model images
-paramNames = wbLabels
-if args.fModel != 1:
-	paramNames.remove('Dispersion'); paramNames.remove('Delay')
-paramNames.append('nRmsd')
+if args.poly is True:
+	paramNames = ['CBF']
+	fitParams = voxCbf[:,np.newaxis]
+else:
+	paramNames = wbLabels
+	if args.fModel != 1:
+		paramNames.remove('Dispersion'); paramNames.remove('Delay')
+	paramNames.append('nRmsd')
 
 #Output images
 for iIdx in range(fitParams.shape[1]):
 	nagini.writeMaskedImage(fitParams[:,iIdx],brainData.shape,brainData,pet.affine,pet.header,'%s_%s'%(args.out[0],paramNames[iIdx]))
+
+#Compute extraction if necessary
+if args.ps is not None:
+	if args.poly is True:
+		voxEx = voxCbf/cbfMasked
+	else:
+		voxEx = 1.0 - np.exp(fitParams[:,0]/-cbfMasked)
+	nagini.writeMaskedImage(voxEx,brainData.shape,brainData,pet.affine,pet.header,'%s_extraction'%(args.out[0]))
+
+	#Compute PSw if we used polynomial regression method
+	if args.poly is True:
+		voxPSw = -cbfMasked*np.log(1.0-voxEx)
+		nagini.writeMaskedImage(voxPSw,brainData.shape,brainData,pet.affine,pet.header,'%s_PSw'%(args.out[0]))
 
 #Write out arguments
 nagini.writeArgs(args,args.out[0])

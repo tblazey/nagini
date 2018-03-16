@@ -278,7 +278,7 @@ def flowTwoIdaif(X,flow,lmbda=1):
 	flowConv = np.convolve(flow*X[1,:],np.exp(-flow/lmbda*X[0,:]))*(X[0,1]-X[0,0])
 	return flowConv[0:X.shape[1]]
 
-def flowTwo(aifTime,cAif,petTac,petTime,petMask):
+def flowTwo(aifTime,cAif,petTac,petTime,petMask,cbf=None):
 
 	#Mask pet data now
 	petTacM = petTac[petMask]
@@ -342,8 +342,13 @@ def flowTwo(aifTime,cAif,petTac,petTime,petMask):
 		"""
 
 		#Rename variables
-		flow = param[0] * 0.007
-		lmbda = param[1] * 0.52
+		if cbf is None:
+			flow = param[0] * 0.007
+			lmbda = param[1] * 0.52
+		else:
+			E = 1 - np.exp(param[0]*0.014/-cbf)
+			flow = cbf * E
+			lmbda = param[1] * 0.52
 
 		#Calculate model prediciton
 		flowConv = np.convolve(flow*cAif,np.exp(-(flow/lmbda)*aifTime))[0:aifTime.shape[0]]
@@ -365,7 +370,7 @@ def flowTwo(aifTime,cAif,petTac,petTime,petMask):
 	#Return function
 	return flowPred
 
-def flowThreeDelay(aifFunc,aifTime,petTac,petTime,kernel=None):
+def flowThreeDelay(aifFunc,aifTime,petTac,petTime,cbf=None):
 
 	"""
 
@@ -426,10 +431,15 @@ def flowThreeDelay(aifFunc,aifTime,petTac,petTime,kernel=None):
 
 		"""
 
-		#Rename parameters
-		flow = param[0] * 0.007
-		lmbda = param[1] * 0.52
-		delta = param[2] * 10
+		#Rename variables
+		if cbf is None:
+			flow = param[0] * 0.007
+			lmbda = param[1] * 0.52
+		else:
+			E = 1 - np.exp(param[0]*0.014/-cbf)
+			flow = cbf * E
+			lmbda = param[1] * 0.52
+		delta = param[2] * 10.0
 
 		#Calculate Aif
 		cAif = aifFunc(aifTime+delta)
@@ -467,7 +477,7 @@ def flowThreeDelay(aifFunc,aifTime,petTac,petTime,kernel=None):
 	#Return function
 	return flowPred
 
-def flowFour(aifFunc,aifTime,petTac,petTime):
+def flowFour(aifFunc,aifTime,petTac,petTime,cbf=None):
 
 	"""
 
@@ -528,8 +538,13 @@ def flowFour(aifFunc,aifTime,petTac,petTime):
 		"""
 
 		#Rename and scale params
-		flow = param[0] * 0.007
-		lmbda = param[1] * 0.52
+		if cbf is None:
+			flow = param[0] * 0.007
+			lmbda = param[1] * 0.52
+		else:
+			E = 1 - np.exp(param[0]*0.014/-cbf)
+			flow = cbf * E
+			lmbda = param[1] * 0.52
 		delta = param[2] * 10.0
 		tau = param[3] * 5.0
 
@@ -1161,7 +1176,7 @@ def knotLoc(X,nKnots,bounds=None):
 
 	return knots
 
-def roiAvg(imgData,roiData,min=None,max=None):
+def roiAvg(imgData,roiData,min=None,max=None,stat='mean'):
 
 	"""
 
@@ -1177,6 +1192,8 @@ def roiAvg(imgData,roiData,min=None,max=None):
 		Minimum value to consider for average.
 	max: float
 		Maximum value to consider for average
+	stat: string
+		Statistic to compute. Options are min, mean, or max.
 
 	Returns
 	-------
@@ -1220,8 +1237,19 @@ def roiAvg(imgData,roiData,min=None,max=None):
 			roiMask = np.logical_and(roiData == uRoi[rIdx],imgMask)
 
 			#Compute mean within mask
-			avgData[rIdx,fIdx] = np.mean(imgData[roiMask,fIdx])
-
+			if np.sum(roiMask) == 0:
+				avgData[rIdx,fIdx] = 0.0
+			else:
+				if stat == 'mean':
+					avgData[rIdx,fIdx] = np.mean(imgData[roiMask,fIdx])
+				elif stat == 'max':
+					avgData[rIdx,fIdx] = np.max(imgData[roiMask,fIdx])
+				elif stat == 'min':
+					avgData[rIdx,fIdx] = np.min(imgData[roiMask,fIdx])
+				else:
+					print 'ERROR: Stat of %s is not a valid option'%(stat)
+					sys.exit()
+				
 	#Return data
 	return avgData
 
@@ -3268,9 +3296,9 @@ def sharedFlow(hoAifTime,hoAif,hoTacTime,hoTac,hoWeights,obAifTime,obAif,obTacTi
 			#Compute total sum of squares
 			sse = 0
 			for i in range(nHo):
-				sse += np.sum(hoWeights*np.power(hoTac[i][voxIdx,:] - hoPred[i],2))
+				sse += np.sum(hoWeights[i]*np.power(hoTac[i][voxIdx,:] - hoPred[i],2))
 			for i in range(nOb):
-				sse += np.sum(obWeights*np.power(obTac[i][voxIdx,:] - obPred[i],2))
+				sse += np.sum(obWeights[i]*np.power(obTac[i][voxIdx,:] - obPred[i],2))
 	
 			if pen is None or prior is None:
 				
@@ -3284,4 +3312,30 @@ def sharedFlow(hoAifTime,hoAif,hoTacTime,hoTac,hoWeights,obAifTime,obAif,obTacTi
 
 	#Return function
 	return sharedPred
+
+def covToCor(cov):
+
+	"""
+
+	Converts a covariance matrix to a correlation matrix
+
+	Parameters
+	----------
+
+	cov: array
+		A m x m covariance matrix
+
+	Returns
+    	-------
+
+	cor: array
+		A m x m correlation matrix
+
+	"""
+
+	dInv = np.linalg.inv(np.diag(np.sqrt(np.diag(cov))))
+	return dInv.dot(cov).dot(dInv)
+
+
+
 
