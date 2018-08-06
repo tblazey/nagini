@@ -11,7 +11,7 @@ argParse.add_argument('img',help='Image to put into ROIs',nargs=1)
 argParse.add_argument('roi',help='Image containing ROIs',nargs=1)
 argParse.add_argument('out',help='Root for output file',nargs=1)
 argParse.add_argument('-nii',help='Output ROI as a ROIx1x1xTime Nifti file. Default is text file',action='store_const',const=1)
-argParse.add_argument('-stat',help='Statistic to compute.',choices=['mean','min','max'],default='mean')
+argParse.add_argument('-stat',help='Statistic to compute.',choices=['mean','min','max','median'],default='mean')
 args = argParse.parse_args()
 
 #Load needed libraries
@@ -43,9 +43,9 @@ avgData = nagini.roiAvg(imgData,roiData,stat=args.stat)
 #Save roi averages in the format user wants.
 if args.nii == 1:
 	avg = nib.Nifti1Image(avgData.reshape((avgData.shape[0],1,1,avgData.shape[1])),np.identity(4))
-	avg.to_filename('%s_roiAvg.nii.gz'%(args.out[0]))
+	avg.to_filename('%s_roi_%s.nii.gz'%(args.out[0],args.stat))
 else:
-	nagini.writeText('%s_roiAvg.txt'%(args.out[0]),avgData)
+	nagini.writeText('%s_roi_%s.txt'%(args.out[0],args.stat),avgData)
 	
 
 
