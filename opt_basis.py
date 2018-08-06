@@ -412,7 +412,7 @@ def main():
         basis_grid = np.zeros((struct_grid.shape[0], args.n[0]))
         for j in range(args.n[0]):
             basis_grid[:, j] = interp.map_coordinates(basis_data[:, :, :, j], grid, order=1)
-        mask_grid = interp.map_coordinates(use_mask, grid, order=0) != 0.0
+        mask_grid = interp.map_coordinates(use_mask, grid, order=0)
 
         #Get initial eta
         eta_log[1, i] = cost_shift(init_opt, epi_data, mean_grid, basis_grid, struct_grid,
