@@ -25,7 +25,7 @@ def parse_args():
     """
 
     #Define parser
-    parser = argparse.ArgumentParser(description='EPI distortion correciton with '
+    parser = argparse.ArgumentParser(description='EPI distortion correction with '
                                                  'shift map basis functions',
                                      epilog='Note: All images must be in register')
     parser.add_argument('epi', type=str, nargs=1, help='3d EPI image to correct')
