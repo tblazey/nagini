@@ -55,7 +55,7 @@ def crop_img(img,ref=None):
 
     #Get bounding box
     if coords.shape[0] > 0:
-        mins = np.fmax(np.min(coords,axis=0) - 1, 0)
+        mins = np.fmax(np.min(coords,axis=0) - 2, 0)
         maxs = np.fmin(np.max(coords,axis=0) + 2, img.shape)
     else:
         mins = np.array([0,0])
@@ -188,23 +188,42 @@ sag = imgData[plotDims[0],:,:].T
 hor = np.rot90(imgData[:,:,plotDims[2]],3)
 cor = np.rot90(imgData[:,plotDims[1],:],3)
 
-#Get cropped version of images
-sag_crop = crop_img(sag)
-hor_crop = crop_img(hor)
-cor_crop = crop_img(cor)
+#Get consistient cropping dimensions
+if args.struct is not None:
 
-#Get ratios for plot grids
-xDims = np.array([sag_crop.shape[1],hor_crop.shape[1],cor_crop.shape[1]])
-yDims = np.array([sag_crop.shape[0],hor_crop.shape[0],cor_crop.shape[0]])
-axisLimits = np.array([np.max(xDims),np.max(yDims)])
+    #Crop structural images
+    struct_sag = crop_img(structData[plotDims[0],:,:].T)
+    struct_hor = crop_img(np.rot90(structData[:,:,plotDims[2]],3))
+    struct_cor = crop_img(np.rot90(structData[:,plotDims[1],:],3))
+
+    #Crop images
+    sag_crop = crop_img(sag,ref=structData[plotDims[0],:,:].T)
+    hor_crop = crop_img(hor,ref=np.rot90(structData[:,:,plotDims[2]],3))
+    cor_crop = crop_img(cor,ref=np.rot90(structData[:,plotDims[1],:],3))
+
+    #Get dims for paddings
+    xDims = np.array([struct_sag.shape[0],struct_hor.shape[0],struct_cor.shape[0]])
+    yDims = np.array([struct_sag.shape[1],struct_hor.shape[1],struct_cor.shape[1]])
+ 
+else:
+
+    #Get cropped version of images
+    sag_crop = crop_img(sag)
+    hor_crop = crop_img(hor)
+    cor_crop = crop_img(cor)
+
+    #Get dims for paddings
+    xDims = np.array([sag_crop.shape[0],hor_crop.shape[0],cor_crop.shape[0]])
+    yDims = np.array([sag_crop.shape[1],hor_crop.shape[1],cor_crop.shape[1]])
 
 #Get paddding dims
-sag_x_pad = (axisLimits[0]-yDims[0]) / 2.0
-sag_y_pad = (axisLimits[1]-xDims[0]) / 2.0
-hor_x_pad = (axisLimits[0]-yDims[1]) / 2.0
-hor_y_pad = (axisLimits[1]-xDims[1]) / 2.0
-cor_x_pad = (axisLimits[0]-yDims[2]) / 2.0
-cor_y_pad = (axisLimits[1]-xDims[2]) / 2.0
+axisLimits = np.array([np.max(xDims),np.max(yDims)])
+sag_x_pad = (axisLimits[0]-xDims[0]) / 2.0
+sag_y_pad = (axisLimits[1]-yDims[0]) / 2.0
+hor_x_pad = (axisLimits[0]-xDims[1]) / 2.0
+hor_y_pad = (axisLimits[1]-yDims[1]) / 2.0
+cor_x_pad = (axisLimits[0]-xDims[2]) / 2.0
+cor_y_pad = (axisLimits[1]-yDims[2]) / 2.0
 
 #Make padding arrays
 sag_pad = np.array([(np.ceil(sag_x_pad),np.floor(sag_x_pad)),
@@ -227,11 +246,6 @@ cor_crop = np.ma.array(cor_crop, mask=cor_crop==0)
 #Do the same thing for structural underlay if necessary
 if args.struct is not None:
 
-    #Crop structural images
-    struct_sag = crop_img(structData[plotDims[0],:,:].T,sag)
-    struct_hor = crop_img(np.rot90(structData[:,:,plotDims[2]],3),hor)
-    struct_cor = crop_img(np.rot90(structData[:,plotDims[1],:],3),cor)
-
     #Pad structural images so that all dimensions are the same
     struct_sag = np.pad(struct_sag,sag_pad,'constant',constant_values=0)
     struct_hor = np.pad(struct_hor,hor_pad,'constant',constant_values=0)
@@ -251,7 +265,7 @@ if args.struct is not None:
 	 plt.imshow(struct_sag,cmap=sMap,vmin=structThr[0],vmax=structThr[1])
 pOne = plt.imshow(sag_crop,cmap=pMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
 nOne = plt.imshow(sag_crop*-1.0,cmap=nMap,vmin=args.thr[0],vmax=args.thr[1],alpha=args.alpha[0])
-plt.xlim([0,axisLimits[0]]); plt.ylim([0,axisLimits[1]]); plt.axis('off')
+plt.xlim([0,axisLimits[0]+2]); plt.ylim([0,axisLimits[1]]); plt.axis('off')
 axOneP = axOne.get_position()
 axOne.set_position((0.1,0.04,axOneP.width,axOneP.height))
 
